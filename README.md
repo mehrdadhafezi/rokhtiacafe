@@ -3,7 +3,8 @@
 Lightweight café management and QR ordering PWA.
 
 - Production: https://rokh.tiacafe.ir (not deployed from this repo yet)
-- Status: project skeleton only — no business features implemented.
+- Status: architecture & design docs under review — no business features implemented yet.
+- Stack: Go 1.27 · chi · pgx · sqlc · goose · PostgreSQL 16+ · React + TS + Vite · Tailwind · shadcn/ui · PWA
 
 ## Layout
 
@@ -22,6 +23,20 @@ cp .env.example .env   # then edit .env with local values
 ```
 
 Backend and frontend setup instructions will be added as each is scaffolded.
+
+## Design docs
+
+| Doc | What it covers |
+|-----|----------------|
+| [PRD](docs/PRD.md) | Scope, roles, non-goals |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Modular monolith, layout, design tokens, deployment shape |
+| [DATABASE](docs/DATABASE.md) / [ERD](docs/ERD.md) | Schema, invariants, cost model, report definitions |
+| [API-CONTRACT](docs/API-CONTRACT.md) | REST `/api/v1` endpoints and errors |
+| [WORKFLOWS](docs/WORKFLOWS.md) | Order, inventory, payment, push, auth flows |
+| [SECURITY](docs/SECURITY.md) | Threats, permission matrix, controls |
+| [ACCEPTANCE](docs/ACCEPTANCE.md) | Testable acceptance criteria |
+| [IMPLEMENTATION-PLAN](docs/IMPLEMENTATION-PLAN.md) | Tasks, decisions, hosting assessment, owner decisions |
+| [REVIEW-RESPONSE](docs/REVIEW-RESPONSE.md) | Architecture review findings F1–F14 and their dispositions |
 
 ## Workflow
 
