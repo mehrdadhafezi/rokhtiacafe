@@ -15,6 +15,7 @@ import { useAuth, useToast } from '../hooks'
 import { categoriesKey, dashboardKey, inventoryKey, productsKey } from '../keys'
 import { inventoryModeLabel, type InventoryMode } from '../labels'
 import { Badge, Card, Field, FormError, MoneyInput, NumberInput, PageHeader, Select, Switch, TextArea, inputClass } from '../ui'
+import { IMAGE_TYPES, imageFileProblem } from './image'
 
 function useCatalog() {
   const categories = useQuery({ queryKey: categoriesKey, queryFn: ({ signal }) => catalogApi.categories(signal) })
@@ -110,6 +111,7 @@ function ProductDialog({ product, categories, onClose }: { product: Product | nu
   const refresh = useRefreshCatalog()
   const toast = useToast()
   const [image, setImage] = useState<string | null>(product?.image_url ?? null)
+  const [fileProblem, setFileProblem] = useState<string | null>(null)
   const price = parseTomanToRial(f.price)
   const tracked = f.inventory_mode === 'TRACKED'
 
@@ -219,12 +221,14 @@ function ProductDialog({ product, categories, onClose }: { product: Product | nu
                 {upload.isPending ? 'در حال بارگذاری…' : image ? 'تغییر تصویر' : 'افزودن تصویر'}
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept={IMAGE_TYPES.join(',')}
                   className="sr-only"
                   disabled={upload.isPending}
                   onChange={(e) => {
                     const file = e.target.files?.[0]
-                    if (file) upload.mutate(file)
+                    const problem = file ? imageFileProblem(file) : null
+                    setFileProblem(problem)
+                    if (file && !problem) upload.mutate(file)
                     e.target.value = ''
                   }}
                 />
@@ -236,7 +240,13 @@ function ProductDialog({ product, categories, onClose }: { product: Product | nu
               )}
             </div>
             <p className="text-xs text-muted-foreground">JPEG، PNG یا WebP، حداکثر ۳ مگابایت.</p>
-            <FormError error={upload.error ?? removeImage.error} />
+            {fileProblem ? (
+              <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
+                {fileProblem}
+              </p>
+            ) : (
+              <FormError error={upload.error ?? removeImage.error} />
+            )}
           </fieldset>
         )}
         <FormError error={save.error} />
