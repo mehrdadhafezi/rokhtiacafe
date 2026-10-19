@@ -38,6 +38,24 @@ func rateLimited(w http.ResponseWriter, wait time.Duration) {
 	httpx.Error(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many attempts, try again later")
 }
 
+// errStaleCredentials means the password hash or active flag changed between verification and
+// the transaction (a concurrent password change, reset or deactivation).
+var errStaleCredentials = errors.New("credentials changed concurrently")
+
+// lockCurrentCredentials re-reads the user under a row lock and confirms the hash that was just
+// verified is still current. Password changes, resets and deactivation lock the same row, so a
+// session can never be created from a password that has already been replaced.
+func lockCurrentCredentials(r *http.Request, q *store.Queries, verified store.User) error {
+	cur, err := q.GetUserByIDForUpdate(r.Context(), verified.ID)
+	if err != nil {
+		return err
+	}
+	if !cur.IsActive || cur.PasswordHash != verified.PasswordHash {
+		return errStaleCredentials
+	}
+	return nil
+}
+
 func unauthenticated(w http.ResponseWriter) {
 	httpx.Error(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid username or password")
 }
@@ -92,6 +110,9 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 
 	var token, csrf string
 	err = store.InTx(r.Context(), a.d.Pool, func(q *store.Queries) error {
+		if err := lockCurrentCredentials(r, q, u); err != nil {
+			return err
+		}
 		var err error
 		token, csrf, err = a.d.Auth.Sessions.Create(r.Context(), q, u.ID, addrPtr(ip), r.UserAgent())
 		if err != nil {
@@ -104,6 +125,10 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 			Action: "auth.login", EntityType: "user", EntityID: strconv.FormatInt(u.ID, 10),
 		})
 	})
+	if errors.Is(err, errStaleCredentials) {
+		unauthenticated(w)
+		return
+	}
 	if err != nil {
 		a.internal(w, r, err)
 		return
@@ -164,6 +189,9 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = store.InTx(r.Context(), a.d.Pool, func(q *store.Queries) error {
+		if err := lockCurrentCredentials(r, q, u); err != nil {
+			return err
+		}
 		if err := q.SetUserPassword(r.Context(), store.SetUserPasswordParams{ID: u.ID, PasswordHash: hash}); err != nil {
 			return err
 		}
@@ -176,6 +204,10 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 			Action: "user.password_change", EntityType: "user", EntityID: strconv.FormatInt(u.ID, 10),
 		})
 	})
+	if errors.Is(err, errStaleCredentials) {
+		httpx.ValidationError(w, map[string]string{"current_password": "incorrect"})
+		return
+	}
 	if err != nil {
 		a.internal(w, r, err)
 		return

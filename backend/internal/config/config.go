@@ -89,7 +89,7 @@ func Load() (Config, error) {
 		errs = append(errs, fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive duration"))
 	}
 
-	base, err := url.Parse(getenv("APP_BASE_URL", "http://localhost:5173"))
+	base, err := url.Parse(getenv("APP_BASE_URL", "http://127.0.0.1:5173"))
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		errs = append(errs, errors.New("APP_BASE_URL must be an absolute http(s) URL"))
 	} else {

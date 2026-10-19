@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -492,3 +493,42 @@ func TestEveryAdminRouteHasAPolicyAction(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Review finding: a login that verified the old password must not create a session after a
+// concurrent password reset has revoked everything.
+func TestLoginRacingPasswordResetLeavesNoStaleSession(t *testing.T) {
+	e := newEnv(t)
+	op := e.createUser("barista", "OPERATOR", "barista-pass-1")
+	for round := 0; round < 20; round++ {
+		newPassword := fmt.Sprintf("barista-pass-new-%02d", round)
+		oldPassword := "barista-pass-1"
+		if round > 0 {
+			oldPassword = fmt.Sprintf("barista-pass-new-%02d", round-1)
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			e.newClient().do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "barista", "password": oldPassword})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := e.users.ResetPassword(e.ctx, audit.System, op, newPassword); err != nil {
+				t.Errorf("reset: %v", err)
+			}
+		}()
+		close(start)
+		wg.Wait()
+
+		var n int
+		if err := e.pool.QueryRow(e.ctx, "SELECT count(*) FROM sessions WHERE user_id = $1", op).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("round %d: %d session(s) survived a password reset", round, n)
+		}
+	}
+}

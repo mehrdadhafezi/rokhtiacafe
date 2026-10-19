@@ -26,7 +26,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Timezone.String() != "Asia/Tehran" {
 		t.Errorf("timezone = %s", c.Timezone)
 	}
-	if c.AppOrigin != "http://localhost:5173" || c.CookieSecure || c.SessionIdle != 12*time.Hour || c.SessionMaxAge != 168*time.Hour {
+	if c.AppOrigin != "http://127.0.0.1:5173" || c.CookieSecure || c.SessionIdle != 12*time.Hour || c.SessionMaxAge != 168*time.Hour {
 		t.Errorf("unexpected auth defaults: origin=%s secure=%v idle=%v max=%v", c.AppOrigin, c.CookieSecure, c.SessionIdle, c.SessionMaxAge)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	_ "time/tzdata" // Asia/Tehran must resolve on Windows and minimal servers.
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/term"
 
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/api"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
@@ -289,12 +290,11 @@ func runUserCreate(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 
 	fmt.Fprint(stdout, "Password (min 10 characters): ")
-	line, err := bufio.NewReader(stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	password, err := readPassword(stdin)
+	fmt.Fprintln(stdout)
+	if err != nil {
 		return fmt.Errorf("read password: %w", err)
 	}
-	fmt.Fprintln(stdout)
-	password := strings.TrimRight(line, "\r\n")
 
 	pool, err := database.Open(ctx, url)
 	if err != nil {
@@ -315,4 +315,18 @@ func runUserCreate(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 	fmt.Fprintf(stdout, "created %s user %q (id %d)\n", u.Role, u.Username, u.ID)
 	return nil
+}
+
+// readPassword reads one line without echo when stdin is an interactive terminal, and as a plain
+// line otherwise (piped input in scripts and tests).
+func readPassword(stdin io.Reader) (string, error) {
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		b, err := term.ReadPassword(int(f.Fd()))
+		return string(b), err
+	}
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }
