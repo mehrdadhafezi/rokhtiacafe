@@ -44,3 +44,13 @@ func Multiline(s string) string {
 
 // Len counts characters, not bytes.
 func Len(s string) int { return utf8.RuneCountInString(s) }
+
+// PersianDigits replaces ASCII digits with Persian ones (user-facing text such as notifications).
+func PersianDigits(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return '۰' + (r - '0')
+		}
+		return r
+	}, s)
+}

@@ -54,6 +54,15 @@ check(existsSync(resolve(dist, 'admin/sw.js')), 'dist/admin/sw.js must exist')
 const sw = read('admin/sw.js')
 check(sw.includes('"/admin/index.html"'), 'service worker must precache /admin/index.html')
 check(!/"\/index\.html"/.test(sw), 'service worker must not precache the customer index.html')
+// Staff push handlers live in the /admin/ worker only (T12).
+check(sw.includes('/admin/push-sw.js'), 'service worker must import /admin/push-sw.js')
+const pushSw = read('admin/push-sw.js')
+check(pushSw.includes("addEventListener('push'") && pushSw.includes("addEventListener('notificationclick'"), 'push-sw.js must handle push and notificationclick')
+check(!existsSync(resolve(dist, 'push-sw.js')), 'there must be no root-level push-sw.js')
+check(!customerHtml.includes('push-sw'), 'customer page must not reference the push worker')
+for (const file of customerJs) {
+  check(!read(file).includes('pushManager'), `customer chunk ${file} must not use the Push API`)
+}
 const customerOnly = [...customerJs].filter((f) => !adminJs.has(f))
 for (const file of customerOnly) {
   check(!sw.includes(`"/${file}"`), `service worker must not precache customer chunk ${file}`)

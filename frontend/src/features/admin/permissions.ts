@@ -23,6 +23,7 @@ export type Action =
   | 'inventory.manage'
   | 'expenses.manage'
   | 'reports.view'
+  | 'push.manage'
   | 'users.manage'
   | 'audit.view'
   | 'self.password'

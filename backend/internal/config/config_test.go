@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	webpush "github.com/SherClockHolmes/webpush-go"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -142,7 +144,8 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"APP_ENV", "HTTP_ADDR", "DATABASE_URL", "LOG_LEVEL", "LOG_FORMAT", "APP_TIMEZONE", "SHUTDOWN_TIMEOUT",
 		"APP_BASE_URL", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_AGE", "TRUSTED_PROXIES", "UPLOAD_DIR", "ORDERING_HOURS",
-		"ORDER_PENDING_TTL", "ORDER_MAX_PENDING", "ORDER_MAX_PENDING_PER_CLIENT", "APP_SECRET_KEY"} {
+		"ORDER_PENDING_TTL", "ORDER_MAX_PENDING", "ORDER_MAX_PENDING_PER_CLIENT", "APP_SECRET_KEY",
+		"VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "PUSH_HOST_ALLOWLIST"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
@@ -178,5 +181,38 @@ func TestOrderingAndSecretConfig(t *testing.T) {
 	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "APP_SECRET_KEY") {
 		t.Errorf("production without secret: %v", err)
+	}
+}
+
+func TestPushConfig(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
+	c, err := Load()
+	if err != nil || c.PushEnabled() || c.PushAllowlist != DefaultPushAllowlist {
+		t.Fatalf("push must be off by default with the documented allowlist: %v %+v", err, c.PushAllowlist)
+	}
+
+	// A valid pair (as printed by `rokh vapid gen`) needs a contact subject.
+	priv, pub, err := webpush.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VAPID_PUBLIC_KEY", pub)
+	t.Setenv("VAPID_PRIVATE_KEY", priv)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VAPID_SUBJECT") {
+		t.Errorf("missing subject: %v", err)
+	}
+	t.Setenv("VAPID_SUBJECT", "mailto:owner@example.com")
+	if c, err = Load(); err != nil || !c.PushEnabled() {
+		t.Fatalf("valid push config: %v", err)
+	}
+
+	t.Setenv("VAPID_PRIVATE_KEY", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VAPID_PRIVATE_KEY") {
+		t.Errorf("half-configured keys must be rejected: %v", err)
+	}
+	t.Setenv("VAPID_PRIVATE_KEY", "not-a-key")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VAPID_PRIVATE_KEY") {
+		t.Errorf("malformed private key: %v", err)
 	}
 }

@@ -482,6 +482,11 @@ func TestLowStockEpisodes(t *testing.T) {
 	if !f.balance().LowStockAlertedAt.Valid || events() != 1 {
 		t.Fatalf("expected one alert (ADMIN only), got %d", events())
 	}
+	var body, url string
+	f.must(f.pool.QueryRow(f.ctx, `SELECT payload->>'body', payload->>'url' FROM notification_events WHERE event_type = 'LOW_STOCK'`).Scan(&body, &url))
+	if body != "Soda: ۳ عدد باقی مانده" || url != "/admin/inventory?filter=low" {
+		t.Errorf("alert payload: %q %q (Persian digits, inventory link)", body, url)
+	}
 	_, err = f.out(1)
 	f.must(err)
 	if events() != 1 {

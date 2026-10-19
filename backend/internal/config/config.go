@@ -48,7 +48,16 @@ type Config struct {
 	// SecretKey derives tracking tokens and client keys (APP_SECRET_KEY, base64, >= 32 bytes).
 	SecretKey       []byte
 	SecretGenerated bool // true when a random key was generated for development
+
+	// Web Push (optional): disabled unless both VAPID keys are set.
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string // secret: never logged
+	VAPIDSubject    string // mailto: or https: contact sent to push services
+	PushAllowlist   string // comma-separated push-service hosts (".suffix" for subdomains)
 }
+
+// PushEnabled reports whether Web Push is configured.
+func (c Config) PushEnabled() bool { return c.VAPIDPublicKey != "" && c.VAPIDPrivateKey != "" }
 
 // IsProduction reports whether the app runs in production mode.
 func (c Config) IsProduction() bool { return c.AppEnv == EnvProduction }
@@ -175,7 +184,34 @@ func Load() (Config, error) {
 		c.SecretGenerated = true
 	}
 
+	errs = append(errs, c.loadPush()...)
+
 	return c, errors.Join(errs...)
+}
+
+// DefaultPushAllowlist mirrors docs/SECURITY.md §12.
+const DefaultPushAllowlist = "fcm.googleapis.com,updates.push.services.mozilla.com,web.push.apple.com,.notify.windows.com"
+
+func (c *Config) loadPush() []error {
+	var errs []error
+	c.VAPIDPublicKey = strings.TrimSpace(os.Getenv("VAPID_PUBLIC_KEY"))
+	c.VAPIDPrivateKey = strings.TrimSpace(os.Getenv("VAPID_PRIVATE_KEY"))
+	c.VAPIDSubject = getenv("VAPID_SUBJECT", "")
+	c.PushAllowlist = getenv("PUSH_HOST_ALLOWLIST", DefaultPushAllowlist)
+	if c.VAPIDPublicKey == "" && c.VAPIDPrivateKey == "" {
+		return nil
+	}
+	// Keys as printed by `rokh vapid gen`: base64url P-256 public point (65 bytes) and scalar (32).
+	if k, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(c.VAPIDPublicKey, "=")); err != nil || len(k) != 65 || k[0] != 4 {
+		errs = append(errs, errors.New("VAPID_PUBLIC_KEY must be a base64url P-256 public key (generate with: rokh vapid gen)"))
+	}
+	if k, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(c.VAPIDPrivateKey, "=")); err != nil || len(k) != 32 {
+		errs = append(errs, errors.New("VAPID_PRIVATE_KEY must be a base64url P-256 private key (generate with: rokh vapid gen)"))
+	}
+	if !strings.HasPrefix(c.VAPIDSubject, "mailto:") && !strings.HasPrefix(c.VAPIDSubject, "https://") {
+		errs = append(errs, errors.New("VAPID_SUBJECT must be a mailto: or https:// contact when Web Push is enabled"))
+	}
+	return errs
 }
 
 // MigrationDatabaseURL returns the schema-owner connection string used only by `rokh migrate`.

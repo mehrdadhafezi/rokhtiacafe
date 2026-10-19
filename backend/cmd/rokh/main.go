@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,7 +18,9 @@ import (
 	"time"
 	_ "time/tzdata" // Asia/Tehran must resolve on Windows and minimal servers.
 
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/term"
 
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/api"
@@ -30,6 +33,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/migrate"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/push"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
@@ -46,6 +50,7 @@ commands:
   migrate status   list migrations and whether they are applied
   check            verify app-enforced data invariants (read-only, uses DATABASE_URL)
   secret gen       print a new random APP_SECRET_KEY
+  vapid gen        print a new VAPID key pair for Web Push (put both in the server .env)
   user create      create a staff account; password is read from stdin
                    flags: -username NAME -display-name NAME -role ADMIN|OPERATOR
   version          print the build version
@@ -87,6 +92,16 @@ func run(args []string, stdout io.Writer) error {
 			return errors.New("usage: rokh secret gen")
 		}
 		fmt.Fprintln(stdout, config.NewSecret())
+		return nil
+	case "vapid":
+		if len(args) != 2 || args[1] != "gen" {
+			return errors.New("usage: rokh vapid gen")
+		}
+		priv, pub, err := webpush.GenerateVAPIDKeys()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "VAPID_PUBLIC_KEY=%s\nVAPID_PRIVATE_KEY=%s\n", pub, priv)
 		return nil
 	case "user":
 		if len(args) < 2 || args[1] != "create" {
@@ -136,6 +151,12 @@ func serve(ctx context.Context) error {
 		Hours: cfg.Ordering, Location: cfg.Timezone, Secret: cfg.SecretKey,
 	})
 	queries := store.New(pool)
+	var pushSvc *push.Service
+	if cfg.PushEnabled() {
+		pushSvc = &push.Service{Pool: pool, Allowlist: push.ParseAllowlist(cfg.PushAllowlist)}
+	} else {
+		logger.Warn("VAPID keys not set: Web Push is disabled (generate with: rokh vapid gen)")
+	}
 	sessions := auth.NewSessions(auth.SessionConfig{IdleTimeout: cfg.SessionIdle, MaxAge: cfg.SessionMaxAge})
 	apiHandler := api.New(api.Deps{
 		Pool:   pool,
@@ -155,6 +176,8 @@ func serve(ctx context.Context) error {
 		OrderPerIP:     ratelimit.New(30, 10*time.Minute),
 		OrderPerClient: ratelimit.New(6, 10*time.Minute),
 		TrackPerIP:     ratelimit.New(240, time.Minute),
+		Push:           pushSvc,
+		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	})
 	handler := httpx.NewRouter(httpx.Deps{
 		Logger:     logger,
@@ -165,6 +188,19 @@ func serve(ctx context.Context) error {
 	})
 	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
 	go expireOrders(ctx, orderSvc, logger)
+	go cleanupNotifications(ctx, pool, logger)
+	if pushSvc != nil {
+		allow := pushSvc.Allowlist
+		worker := &push.Worker{
+			Pool: pool, Logger: logger,
+			Sender: push.WebPushSender{
+				Client: push.NewHTTPClient(net.DefaultResolver), PublicKey: cfg.VAPIDPublicKey,
+				PrivateKey: cfg.VAPIDPrivateKey, Subject: cfg.VAPIDSubject,
+			},
+			Validate: func(endpoint string) error { return push.ValidateEndpoint(endpoint, allow) },
+		}
+		go worker.Run(ctx, 10*time.Second)
+	}
 	srv := httpx.NewServer(cfg.HTTPAddr, handler, logger)
 
 	errCh := make(chan error, 1)
@@ -372,6 +408,25 @@ func expireOrders(ctx context.Context, svc *orders.Service, logger *slog.Logger)
 			logger.Warn("order expiry failed", "err", err)
 		} else if n > 0 {
 			logger.Info("pending orders expired", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// cleanupNotifications deletes finished outbox rows older than 30 days, once a day.
+func cleanupNotifications(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		n, err := push.Cleanup(ctx, pool, time.Now())
+		if err != nil && ctx.Err() == nil {
+			logger.Warn("notification cleanup failed", "err", err)
+		} else if n > 0 {
+			logger.Info("old notifications removed", "count", n)
 		}
 		select {
 		case <-ctx.Done():

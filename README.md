@@ -28,7 +28,7 @@ Requirements: Go 1.27, Docker Desktop (Compose v2), PowerShell 7.
 
 Other commands: `db-up`, `db-down`, `db-reset`, `migrate`, `status`, `build`, `fmt`, `vet`,
 `test`, `sqlc`, `sqlc-diff`, `smoke`. The server binary itself: `rokh serve | migrate up |
-migrate status | version`.
+migrate status | check | secret gen | vapid gen | user create | version`.
 
 ### Frontend
 
@@ -42,6 +42,21 @@ staff app (`/admin/…`, installable PWA scoped to `/admin/`).
 ```
 
 Also `fe-install`, `fe-test`, `fe-build`, or the npm scripts in `frontend/package.json`.
+
+### Web Push (optional)
+
+Low-stock alerts for ADMIN devices. Push stays off until both VAPID keys are set:
+
+```powershell
+cd backend; go run ./cmd/rokh vapid gen   # prints VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY for .env
+```
+
+Also set `VAPID_SUBJECT` (`mailto:` or `https://` contact) and, if needed, `PUSH_HOST_ALLOWLIST`
+(see `.env.example`). The private key belongs only in the server `.env`. Notifications need the
+staff app served from a production build (`npm run build` + `npm run preview`, or the release
+binary) because the service worker is registered only in production builds; enable them under
+**حساب کاربری → اعلان موجودی کم**. Delivery is best effort; the dashboard low-stock list is the
+source of truth.
 
 ### Without Docker
 

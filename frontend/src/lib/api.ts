@@ -34,6 +34,7 @@ export type ApiErrorCode =
   | 'ORDERING_CLOSED'
   | 'ORDERING_BUSY'
   | 'BUSY_RETRY'
+  | 'PUSH_NOT_CONFIGURED'
   | 'INTERNAL'
   /** Client-side: the request never got a response (offline, DNS, proxy down). */
   | 'NETWORK_ERROR'

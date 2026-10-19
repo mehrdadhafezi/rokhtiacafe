@@ -51,6 +51,7 @@
 | 503 | `ORDERING_CLOSED` | Outside ordering hours or ordering switched off by staff |
 | 503 | `ORDERING_BUSY` | Global pending-order cap reached |
 | 503 | `BUSY_RETRY` | Lock timeout; safe to retry with the same idempotency key |
+| 503 | `PUSH_NOT_CONFIGURED` | Web Push endpoints when the server has no VAPID keys |
 | 500 | `INTERNAL` | Never includes internal detail; logged with request id |
 
 All responses carry `X-Request-Id`.
@@ -222,10 +223,10 @@ Definitions: [DATABASE.md §7](DATABASE.md#7-reporting-queries-definitions).
 ### 5.8 Push
 | Method | Path | Role | Body |
 |--------|------|------|------|
-| GET | `/admin/push/vapid-public-key` | A | `{ key }` |
-| POST | `/admin/push/subscriptions` | A | `{ endpoint, keys: { p256dh, auth } }` (upsert by endpoint, bound to current user). Endpoint must be `https`, ≤ 2048 chars, and on the push-service allowlist (SECURITY §12) → else `422` (F11) |
-| DELETE | `/admin/push/subscriptions` | A | `{ endpoint }` |
-| POST | `/admin/push/test` | A | Sends a TEST notification to the caller's subscriptions |
+| GET | `/admin/push/vapid-public-key` | A | `{ key }`; `503 PUSH_NOT_CONFIGURED` without VAPID keys |
+| POST | `/admin/push/subscriptions` | A | `{ endpoint, keys: { p256dh, auth } }` (upsert by endpoint, bound to current user) → `200 {id, created_at}`. Endpoint must be `https`, port 443, no userinfo or IP literal, ≤ 2048 chars, and on the push-service allowlist (SECURITY §12); `p256dh` a P-256 public key, `auth` 16 bytes (base64url) → else `422` (F11) |
+| DELETE | `/admin/push/subscriptions` | A | `{ endpoint }` → `204`; only the caller's own subscription; idempotent |
+| POST | `/admin/push/test` | A | Queues a TEST notification to each of the caller's subscriptions → `202 {queued}`; `409 CONFLICT` when the caller has none. Delivered by the outbox worker within ~10 s (best effort) |
 
 ### 5.9 Users & audit (ADMIN)
 | Method | Path | Body |

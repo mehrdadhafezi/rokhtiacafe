@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, apiRequest } from '@/lib/api'
 
 import type {
   CancelReason,
@@ -387,4 +387,14 @@ export const usersApi = {
   update: (id: number, body: { display_name?: string; role?: RoleName; is_active?: boolean }) =>
     api.patch<AdminUser>(`/admin/users/${id}`, body),
   resetPassword: (id: number, new_password: string) => api.post<void>(`/admin/users/${id}/password`, { new_password }),
+}
+
+// ---- web push ----
+
+export const pushApi = {
+  publicKey: (signal?: AbortSignal) => api.get<{ key: string }>('/admin/push/vapid-public-key', { signal }),
+  subscribe: (body: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    api.post<{ id: number }>('/admin/push/subscriptions', body),
+  unsubscribe: (endpoint: string) => apiRequest<void>('/admin/push/subscriptions', { method: 'DELETE', body: { endpoint } }),
+  test: () => api.post<{ queued: number }>('/admin/push/test'),
 }

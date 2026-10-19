@@ -194,7 +194,7 @@ func evaluateLowStock(ctx context.Context, q *store.Queries, p store.Product, b 
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"type": "LOW_STOCK", "product_id": p.ID, "title": "موجودی کم",
-		"body": fmt.Sprintf("%s: %d عدد باقی مانده", p.Name, available), "url": "/admin/inventory?filter=low",
+		"body": fmt.Sprintf("%s: %s عدد باقی مانده", p.Name, textutil.PersianDigits(strconv.Itoa(int(available)))), "url": "/admin/inventory?filter=low",
 	})
 	// Microseconds: PostgreSQL's timestamp precision, so two episodes never share a key.
 	key := "LOW_STOCK:" + strconv.FormatInt(p.ID, 10) + ":" + strconv.FormatInt(at.Time.UnixMicro(), 10)

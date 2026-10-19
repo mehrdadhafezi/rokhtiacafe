@@ -27,6 +27,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/migrate"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/push"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/testdb"
@@ -49,7 +50,7 @@ type env struct {
 	orders *orders.Service
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T, opts ...func(*api.Deps)) *env {
 	t.Helper()
 	db := testdb.New(t)
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -84,7 +85,7 @@ func newEnv(t *testing.T) *env {
 		Hours: hours, Location: tehran, Secret: secret})
 
 	q := store.New(pool)
-	a := api.New(api.Deps{
+	deps := api.Deps{
 		Pool:   pool,
 		Logger: quiet,
 		Auth: &auth.Middleware{
@@ -101,7 +102,13 @@ func newEnv(t *testing.T) *env {
 		OrderPerIP:     ratelimit.New(1000, time.Minute),
 		OrderPerClient: ratelimit.New(6, 10*time.Minute),
 		TrackPerIP:     ratelimit.New(1000, time.Minute),
-	})
+		Push:           &push.Service{Pool: pool, Allowlist: push.ParseAllowlist(config.DefaultPushAllowlist)},
+		VAPIDPublicKey: "test-vapid-public-key",
+	}
+	for _, o := range opts {
+		o(&deps)
+	}
+	a := api.New(deps)
 	srv := httptest.NewServer(httpx.NewRouter(httpx.Deps{Logger: quiet, DB: pool, API: a.Handler(), Media: images.MediaHandler()}))
 	t.Cleanup(srv.Close)
 
