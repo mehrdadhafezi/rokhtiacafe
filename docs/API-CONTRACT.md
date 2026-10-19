@@ -128,7 +128,7 @@ Role column: **O** = OPERATOR and ADMIN, **A** = ADMIN only.
 ### 5.1 Dashboard
 | Method | Path | Role | Notes |
 |--------|------|------|-------|
-| GET | `/admin/dashboard` | O | `{ open_counts: {PENDING, PREPARING, READY}, today_orders, low_stock: [{product_id, name, available, threshold}], ordering_open, today_revenue_rial? }` — revenue only for ADMIN |
+| GET | `/admin/dashboard` | O | `{ open_counts: {PENDING, PREPARING, READY}, today_orders, low_stock: [{product_id, name, available, threshold}], ordering_open, ordering_switch_open, ordering_hours: {open, opens_at, closes_at}, today_revenue_rial? }` — revenue only for ADMIN; `ordering_open` is the effective state, `ordering_switch_open` the kill switch alone |
 | PUT | `/admin/ordering` | A | `{ open: bool }` — emergency kill switch for public ordering (F11). In memory, audited; resets to `ORDERING_HOURS` behaviour on restart (owner decision O4) |
 
 ### 5.2 Orders
