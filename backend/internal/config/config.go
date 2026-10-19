@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -185,8 +186,40 @@ func Load() (Config, error) {
 	}
 
 	errs = append(errs, c.loadPush()...)
+	if c.IsProduction() {
+		errs = append(errs, c.validateProduction()...)
+	}
 
 	return c, errors.Join(errs...)
+}
+
+// validateProduction enforces the deployment layout of docs/ARCHITECTURE.md §4: the binary sits
+// behind a reverse proxy on loopback, runs as the DML-only database role, and keeps uploads in a
+// fixed directory outside the web root.
+func (c *Config) validateProduction() []error {
+	var errs []error
+	if host, _, err := net.SplitHostPort(c.HTTPAddr); err == nil {
+		if ip, err := netip.ParseAddr(host); host != "localhost" && (err != nil || !ip.IsLoopback()) {
+			errs = append(errs, errors.New("production HTTP_ADDR must listen on loopback (e.g. 127.0.0.1:8080) behind the reverse proxy"))
+		}
+	}
+	if len(c.TrustedProxies) == 0 {
+		errs = append(errs, errors.New("production requires TRUSTED_PROXIES (the reverse proxy, e.g. 127.0.0.1); otherwise every customer shares one rate-limit bucket"))
+	}
+	if !filepath.IsAbs(c.UploadDir) && !strings.HasPrefix(c.UploadDir, "/") {
+		errs = append(errs, errors.New("production UPLOAD_DIR must be an absolute path outside the web root"))
+	}
+	if u, err := url.Parse(c.DatabaseURL); err == nil && (u.Scheme == "postgres" || u.Scheme == "postgresql") && u.User != nil {
+		user := u.User.Username()
+		owner := ""
+		if m, err := url.Parse(os.Getenv("MIGRATION_DATABASE_URL")); err == nil && m.User != nil {
+			owner = m.User.Username()
+		}
+		if user == "postgres" || user == "rokh_owner" || (owner != "" && user == owner) {
+			errs = append(errs, errors.New("production DATABASE_URL must use the DML-only app role (rokh_app), not the schema owner or a superuser"))
+		}
+	}
+	return errs
 }
 
 // DefaultPushAllowlist mirrors docs/SECURITY.md §12.

@@ -67,7 +67,7 @@ backend/
     push/                   # subscriptions, outbox worker
     audit/                  # audit.Record(ctx, tx, ...)
     jobs/                   # ticker loop running module jobs
-  web/                      # embed.go → frontend/dist copied at build time
+  web/                      # embed.go → ui/ (frontend/dist copied by scripts/build-release.sh)
 ```
 
 ### 2.3 Module rules

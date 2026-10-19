@@ -27,8 +27,8 @@ Requirements: Go 1.27, Docker Desktop (Compose v2), PowerShell 7.
 ```
 
 Other commands: `db-up`, `db-down`, `db-reset`, `migrate`, `status`, `build`, `fmt`, `vet`,
-`test`, `sqlc`, `sqlc-diff`, `smoke`. The server binary itself: `rokh serve | migrate up |
-migrate status | check | secret gen | vapid gen | user create | version`.
+`test`, `sqlc`, `sqlc-diff`, `smoke`, `release`. The server binary itself: `rokh serve | migrate up |
+migrate status | check | config check | secret gen | vapid gen | user create | version`.
 
 ### Frontend
 
@@ -57,6 +57,14 @@ staff app served from a production build (`npm run build` + `npm run preview`, o
 binary) because the service worker is registered only in production builds; enable them under
 **حساب کاربری → اعلان موجودی کم**. Delivery is best effort; the dashboard low-stock list is the
 source of truth.
+
+### Release build
+
+`./scripts/dev.ps1 release` (or `bash scripts/build-release.sh <version>`) builds both React
+entry points and embeds them in one static Linux amd64 binary, `release/rokh-linux-amd64`, with a
+SHA-256 checksum. The build is reproducible and CI rebuilds it on every PR (`release` workflow).
+Deployment is manual and owner-approved; see [deploy/README.md](deploy/README.md) and the hosting
+assessment in [docs/HOSTING-ASSESSMENT.md](docs/HOSTING-ASSESSMENT.md).
 
 ### Without Docker
 

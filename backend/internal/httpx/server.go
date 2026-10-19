@@ -21,6 +21,7 @@ type Deps struct {
 	Production bool
 	API        http.Handler // mounted at /api/v1 when set
 	Media      http.Handler // mounted at /media/ when set (product images)
+	Static     http.Handler // embedded frontend: every other path when set
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -45,6 +46,10 @@ func NewRouter(d Deps) http.Handler {
 	}
 	if d.Media != nil {
 		r.Handle("/media/*", d.Media)
+	}
+	if d.Static != nil {
+		// Lowest priority: /api/v1, /media and the health endpoints above always win.
+		r.Handle("/*", d.Static)
 	}
 	return r
 }

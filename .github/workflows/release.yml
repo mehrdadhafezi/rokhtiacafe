@@ -1,0 +1,117 @@
+name: release
+
+# Builds the single release binary (frontend embedded), proves the build is reproducible and
+# smoke-tests it in production mode against PostgreSQL. Never deploys; the binary is kept as a
+# short-lived workflow artifact for a manual, owner-approved deployment.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: release build (linux/amd64)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      PGPASSWORD: ci_only
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build
+        run: scripts/build-release.sh "ci-${GITHUB_SHA::12}"
+
+      - name: Reproducible (clean rebuild gives the same SHA-256)
+        run: |
+          cp release/rokh-linux-amd64.sha256 /tmp/first.sha256
+          rm -rf release frontend/dist frontend/node_modules
+          find backend/web/ui -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+          scripts/build-release.sh "ci-${GITHUB_SHA::12}"
+          diff /tmp/first.sha256 release/rokh-linux-amd64.sha256
+          file release/rokh-linux-amd64 | tee /dev/stderr | grep -q 'statically linked'
+
+      - name: Database roles and migrations (as rokh_owner)
+        env:
+          MIGRATION_DATABASE_URL: postgres://rokh_owner:owner_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+        run: |
+          psql -h localhost -U postgres -d postgres \
+            -v owner_password=owner_ci_only -v app_password=app_ci_only -v db_name=rokhtiacafe \
+            -f deploy/local/postgres/roles.sql
+          release/rokh-linux-amd64 migrate up
+
+      - name: Smoke test in production mode
+        env:
+          APP_ENV: production
+          HTTP_ADDR: 127.0.0.1:8080
+          APP_BASE_URL: https://rokh.example.test
+          TRUSTED_PROXIES: 127.0.0.1
+          UPLOAD_DIR: /tmp/rokh-uploads
+          DATABASE_URL: postgres://rokh_app:app_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+        run: |
+          export APP_SECRET_KEY="$(release/rokh-linux-amd64 secret gen)"
+          mkdir -p "$UPLOAD_DIR"
+          bin=release/rokh-linux-amd64
+          $bin config check
+          $bin check
+          $bin serve > serve.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 50); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:8080/readyz | grep -q '"ready"'
+          test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://127.0.0.1:8080/)" = "302 http://127.0.0.1:8080/menu"
+          curl -fsS http://127.0.0.1:8080/menu/order | grep -q 'dir="rtl"'
+          curl -fsS http://127.0.0.1:8080/admin/orders/1 | grep -q 'manifest.webmanifest'
+          curl -fsSI http://127.0.0.1:8080/admin/sw.js | grep -qi '^service-worker-allowed: /admin/'
+          curl -fsSI http://127.0.0.1:8080/admin/manifest.webmanifest | grep -qi '^content-type: application/manifest+json'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/assets/missing.js)" = 404
+          curl -fsS http://127.0.0.1:8080/api/v1/public/menu | grep -q '"ordering"'
+          kill -TERM "$pid"
+          wait "$pid"
+          grep -q "server stopped" serve.log
+
+      - name: Production refuses a binary without the frontend
+        env:
+          APP_ENV: production
+          HTTP_ADDR: 127.0.0.1:8081
+          APP_BASE_URL: https://rokh.example.test
+          TRUSTED_PROXIES: 127.0.0.1
+          UPLOAD_DIR: /tmp/rokh-uploads
+          DATABASE_URL: postgres://rokh_app:app_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+        run: |
+          export APP_SECRET_KEY="$(release/rokh-linux-amd64 secret gen)"
+          find backend/web/ui -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+          (cd backend && go build -o /tmp/rokh-no-ui ./cmd/rokh)
+          if /tmp/rokh-no-ui serve > noui.log 2>&1; then echo "started without a frontend"; exit 1; fi
+          grep -q "no frontend embedded" noui.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rokh-linux-amd64-${{ github.sha }}
+          path: release/
+          retention-days: 14
