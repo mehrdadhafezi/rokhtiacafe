@@ -112,3 +112,24 @@ func TestCheckDetectsCorruption(t *testing.T) {
 		}
 	}
 }
+
+// F9: a refund that does not mirror its payment is reported.
+func TestCheckDetectsRefundMismatch(t *testing.T) {
+	app, _ := setup(t)
+	mustExec(t, app, `INSERT INTO users (username, display_name, password_hash, role) VALUES ('admin', 'A', 'x', 'ADMIN')`)
+	mustExec(t, app, `INSERT INTO orders (business_date, display_number, tracking_token_hash, idempotency_key, request_hash,
+		client_key, total_rial, expires_at, status, accepted_at, ready_at, completed_at, paid_rial, refunded_rial)
+		VALUES (current_date, 1, $1, gen_random_uuid(), $2, $3, 1000, now() + interval '20 minutes', 'COMPLETED', now(), now(), now(), 1000, 1000)`,
+		r32(), r32(), r32())
+	mustExec(t, app, `INSERT INTO categories (name) VALUES ('c')`)
+	mustExec(t, app, `INSERT INTO products (category_id, name, price_rial, inventory_mode) VALUES (1, 'x', 1000, 'UNTRACKED')`)
+	mustExec(t, app, `INSERT INTO order_items (order_id, product_id, product_name, inventory_mode, unit_price_rial, quantity, line_total_rial, cogs_rial)
+		VALUES (1, 1, 'x', 'UNTRACKED', 1000, 1, 1000, 0)`)
+	mustExec(t, app, `INSERT INTO payments (order_id, kind, method, amount_rial, idempotency_key, created_by) VALUES (1, 'PAYMENT', 'CASH', 1000, gen_random_uuid(), 1)`)
+	mustExec(t, app, `INSERT INTO payments (order_id, kind, method, amount_rial, refund_of_payment_id, created_by) VALUES (1, 'REFUND', 'CARD_TERMINAL', 1000, 1, 1)`)
+
+	got := strings.Join(run(t, app), "\n")
+	if !strings.Contains(got, "refund 2 does not mirror") {
+		t.Errorf("mismatch not reported:\n%s", got)
+	}
+}

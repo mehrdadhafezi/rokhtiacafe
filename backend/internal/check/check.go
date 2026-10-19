@@ -82,6 +82,14 @@ func Run(ctx context.Context, q store.Querier) ([]Violation, error) {
 		add("INV-8", "order %d (%s) line %d has cogs set inconsistently with its status", r.OrderID, r.Status, r.ItemID)
 	}
 
+	mirrors, err := q.CheckRefundsMirrorPayments(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("refund mirror check: %w", err)
+	}
+	for _, r := range mirrors {
+		add("INV-11", "refund %d does not mirror a non-void payment of the same order, method and amount (payment %d)", r.RefundID, r.PaymentID.Int64)
+	}
+
 	admins, err := q.CheckActiveAdminExists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("admin check: %w", err)
