@@ -60,4 +60,12 @@ Full list: [DATABASE.md §3](docs/DATABASE.md#3-invariants).
 Go 1.27.2 at `D:\Apps\bin\go.exe` (GOROOT `D:\Apps`) — if `go` is not found, put `D:\Apps\bin`
 on PATH; do not touch Windows Installer settings. Node 24 / npm 11, Docker + Compose, gh CLI.
 PostgreSQL: dev/CI 17, minimum 16.
-Commands will be documented here as T1/T9 add them.
+
+## Commands
+
+- `./scripts/dev.ps1 setup | run | check | test | migrate | status | sqlc | smoke` (see README).
+- Integration tests need the local DB (`./scripts/dev.ps1 db-up`); each test gets its own
+  throwaway database via `internal/testdb`. `REQUIRE_DB_TESTS=1` makes them fail instead of skip.
+- sqlc runs from the pinned Docker image `sqlc/sqlc:1.29.0`; commit generated `internal/store`.
+- New migrations: `backend/db/migrations/NNNNN_name.sql` with `-- +goose Up` / `-- +goose Down`.
+  They run as `rokh_owner`; grant DELETE explicitly only where DATABASE.md allows it.
