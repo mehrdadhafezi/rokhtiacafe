@@ -30,9 +30,11 @@ type Querier interface {
 	// INV-3: reserved = open (PENDING/PREPARING/READY) tracked order quantities.
 	CheckReservedMatchesOpenOrders(ctx context.Context) ([]CheckReservedMatchesOpenOrdersRow, error)
 	CheckTrackedProductsHaveBalance(ctx context.Context) ([]int64, error)
+	ClearLowStockAlerted(ctx context.Context, productID int64) error
 	CountActiveAdmins(ctx context.Context) (int64, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
 	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
+	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (PurchaseEntry, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteExpiredSessions(ctx context.Context, idleCutoff pgtype.Timestamptz) (int64, error)
@@ -44,30 +46,50 @@ type Querier interface {
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetCategoryForUpdate(ctx context.Context, id int64) (Category, error)
 	GetInventoryBalanceForUpdate(ctx context.Context, productID int64) (InventoryBalance, error)
+	GetMovementByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (InventoryMovement, error)
 	GetProduct(ctx context.Context, id int64) (Product, error)
+	// Inventory: balances, the movement ledger and purchases (docs/DATABASE.md §2.5–2.7, §5.1).
+	// Lock order (§3.1): products FOR SHARE → inventory_balances FOR UPDATE.
+	GetProductForShare(ctx context.Context, id int64) (Product, error)
 	GetProductForUpdate(ctx context.Context, id int64) (Product, error)
+	GetPurchaseByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (PurchaseEntry, error)
+	GetPurchaseForUpdate(ctx context.Context, id int64) (PurchaseEntry, error)
+	GetPurchaseMovement(ctx context.Context, purchaseEntryID pgtype.Int8) (InventoryMovement, error)
 	// Every request re-reads the user, so deactivation and role changes apply immediately.
 	GetSessionWithUser(ctx context.Context, tokenHash []byte) (GetSessionWithUserRow, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByIDForUpdate(ctx context.Context, id int64) (User, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+	// True when stock left the product after the given movement (blocks exact purchase voids, F4).
+	HasOutflowAfter(ctx context.Context, arg HasOutflowAfterParams) (bool, error)
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
+	InsertMovement(ctx context.Context, arg InsertMovementParams) (InventoryMovement, error)
+	InsertNotificationEvent(ctx context.Context, arg InsertNotificationEventParams) error
+	// Low-stock alerts go to active ADMIN users only (D11).
+	ListAdminPushSubscriptions(ctx context.Context) ([]int64, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
 	ListCategories(ctx context.Context) ([]Category, error)
+	// Tracked products with their balance; products without a balance row show zeros.
+	ListInventory(ctx context.Context) ([]ListInventoryRow, error)
+	ListMovements(ctx context.Context, arg ListMovementsParams) ([]InventoryMovement, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
+	ListPurchases(ctx context.Context, arg ListPurchasesParams) ([]PurchaseEntry, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	// Readiness probe: proves the runtime role can run a query.
 	Ping(ctx context.Context) (int32, error)
 	// Active categories and products only. Exact stock is never exposed, only availability.
 	PublicMenu(ctx context.Context) ([]PublicMenuRow, error)
+	SetLowStockAlerted(ctx context.Context, productID int64) (pgtype.Timestamptz, error)
 	SetProductAvailability(ctx context.Context, arg SetProductAvailabilityParams) (Product, error)
 	SetProductImage(ctx context.Context, arg SetProductImageParams) (Product, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	TouchSession(ctx context.Context, tokenHash []byte) error
 	TouchUserLogin(ctx context.Context, id int64) error
+	UpdateBalanceStock(ctx context.Context, arg UpdateBalanceStockParams) (InventoryBalance, error)
 	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
 	UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
+	VoidPurchase(ctx context.Context, arg VoidPurchaseParams) (PurchaseEntry, error)
 }
 
 var _ Querier = (*Queries)(nil)
