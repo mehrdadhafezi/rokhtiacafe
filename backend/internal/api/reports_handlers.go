@@ -220,7 +220,15 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) {
 	for i, l := range low {
 		lowView[i] = lowStockView{ProductID: l.ProductID, Name: l.Name, Available: l.Available, Threshold: l.Threshold}
 	}
-	out := map[string]any{"open_counts": open, "today_orders": todayOrders, "low_stock": lowView, "ordering_open": a.orderingOpen(now)}
+	// ordering_open is the effective state (hours and kill switch); the switch and hours are
+	// reported separately so the staff UI can explain why ordering is closed.
+	switchOpen := true
+	if a.d.Orders != nil {
+		switchOpen = a.d.Orders.SwitchOpen()
+	}
+	out := map[string]any{"open_counts": open, "today_orders": todayOrders, "low_stock": lowView,
+		"ordering_open": a.orderingOpen(now), "ordering_switch_open": switchOpen,
+		"ordering_hours": orderingView{Open: a.orderingOpen(now), OpensAt: a.d.Ordering.Opens(), ClosesAt: a.d.Ordering.Closes()}}
 	if auth.Can(auth.FromContext(r.Context()).Role, auth.ActDashboardRevenue) {
 		s, err := a.reports.Summary(r.Context(), a.reports.Today())
 		if err != nil {

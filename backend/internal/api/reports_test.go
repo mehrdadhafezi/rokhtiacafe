@@ -104,4 +104,15 @@ func TestDashboard(t *testing.T) {
 	if v, ok := body["today_revenue_rial"]; !ok || v.(float64) != 0 {
 		t.Errorf("ADMIN today_revenue_rial = %v", v)
 	}
+	if body["ordering_switch_open"] != true || body["ordering_hours"].(map[string]any)["opens_at"] == "" {
+		t.Errorf("ordering state = %v / %v", body["ordering_switch_open"], body["ordering_hours"])
+	}
+
+	// The kill switch is reported separately from the effective state.
+	resp, body = admin.do(http.MethodPut, "/api/v1/admin/ordering", map[string]any{"open": false})
+	expect(t, resp, body, http.StatusOK, "")
+	_, body = op.do(http.MethodGet, "/api/v1/admin/dashboard", nil)
+	if body["ordering_switch_open"] != false || body["ordering_open"] != false {
+		t.Errorf("after switch off: switch=%v open=%v", body["ordering_switch_open"], body["ordering_open"])
+	}
 }

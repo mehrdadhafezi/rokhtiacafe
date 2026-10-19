@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
 
@@ -22,6 +22,7 @@ export function Dialog({
   className?: string
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
 
   useEffect(() => {
     const d = ref.current
@@ -33,7 +34,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      aria-labelledby="dialog-title"
+      aria-labelledby={titleId}
       onClose={onClose}
       onClick={(e) => e.target === ref.current && onClose()}
       className={cn(
@@ -44,7 +45,7 @@ export function Dialog({
       )}
     >
       <div className="flex max-h-[85dvh] flex-col">
-        <h2 id="dialog-title" className="border-b px-5 py-4 text-lg font-bold">
+        <h2 id={titleId} className="border-b px-5 py-4 text-lg font-bold">
           {title}
         </h2>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
