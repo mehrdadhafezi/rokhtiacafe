@@ -37,7 +37,8 @@ func TestOrderingHours(t *testing.T) {
 		t.Error("overnight window wrong")
 	}
 
-	for _, bad := range []string{"", "8-23", "25:00-23:00", "08:60-23:00", "10:00-10:00", "24:30-01:00"} {
+	for _, bad := range []string{"", "8-23", "25:00-23:00", "08:60-23:00", "10:00-10:00", "24:30-01:00",
+		"08:00-23:000", "08:00-23:00junk", " 08:00-23:00", "8:00-23:00", "08:00 - 23:00", "-8:00-23:00"} {
 		if _, err := ParseOrderingHours(bad); err == nil {
 			t.Errorf("ParseOrderingHours(%q) accepted", bad)
 		}

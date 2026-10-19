@@ -366,3 +366,50 @@ func TestProductImageUpload(t *testing.T) {
 	}
 	_ = color.Black
 }
+
+// Review finding: public routes must not resolve or refresh staff sessions.
+func TestPublicMenuDoesNotTouchStaffSession(t *testing.T) {
+	e := newEnv(t)
+	admin := e.newClient().login("admin", adminPassword)
+	if _, err := e.pool.Exec(e.ctx, "UPDATE sessions SET last_seen_at = now() - interval '1 hour'"); err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	_ = e.pool.QueryRow(e.ctx, "SELECT last_seen_at::text FROM sessions").Scan(&before)
+	for i := 0; i < 3; i++ {
+		resp, body := admin.do(http.MethodGet, "/api/v1/public/menu", nil)
+		expect(t, resp, body, http.StatusOK, "")
+		for _, c := range resp.Cookies() {
+			if strings.Contains(c.Name, "rokh_session") {
+				t.Errorf("public route set a session cookie: %+v", c)
+			}
+		}
+	}
+	var after string
+	_ = e.pool.QueryRow(e.ctx, "SELECT last_seen_at::text FROM sessions").Scan(&after)
+	if before != after {
+		t.Errorf("public menu refreshed the staff session: %s -> %s", before, after)
+	}
+}
+
+// Review finding: explicit null on a non-nullable PATCH field is rejected, not ignored.
+func TestPatchRejectsNullForNonNullableFields(t *testing.T) {
+	e := newEnv(t)
+	admin := e.newClient().login("admin", adminPassword)
+	_, _, espresso, _, _ := seedCatalog(t, admin)
+	for _, field := range []string{"price_rial", "name", "category_id", "inventory_mode", "is_active", "sort_order"} {
+		resp, body := admin.do(http.MethodPatch, path("/api/v1/admin/products/%v", espresso), map[string]any{field: nil})
+		expect(t, resp, body, http.StatusUnprocessableEntity, "VALIDATION_ERROR")
+	}
+	resp, body := admin.do(http.MethodPatch, "/api/v1/admin/categories/1", map[string]any{"name": nil})
+	expect(t, resp, body, http.StatusUnprocessableEntity, "VALIDATION_ERROR")
+	resp, body = admin.do(http.MethodPatch, "/api/v1/admin/users/1", map[string]any{"role": nil})
+	expect(t, resp, body, http.StatusUnprocessableEntity, "VALIDATION_ERROR")
+
+	// Nullable fields still accept null.
+	resp, body = admin.do(http.MethodPatch, path("/api/v1/admin/products/%v", espresso), map[string]any{"description": nil, "estimated_unit_cost_rial": nil})
+	expect(t, resp, body, http.StatusOK, "")
+	if body["price_rial"].(float64) != 950000 {
+		t.Errorf("price changed unexpectedly: %v", body)
+	}
+}

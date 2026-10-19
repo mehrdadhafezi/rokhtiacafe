@@ -49,14 +49,16 @@ func New(d Deps) *API {
 		catalog: &catalog.Service{Pool: d.Pool, Images: d.Images}, perms: map[string]auth.Action{}}
 
 	r := chi.NewRouter()
-	r.Use(d.Auth.Authenticate)
 
+	// Public routes never read the session cookie, so browsing the menu cannot keep a staff
+	// session alive or touch the sessions table.
 	r.Route("/public", func(r chi.Router) {
 		r.Use(a.publicRateLimit)
 		r.Get("/menu", a.publicMenu)
 	})
 
 	r.Route("/auth", func(r chi.Router) {
+		r.Use(d.Auth.Authenticate)
 		r.With(d.Auth.RequireOrigin).Post("/login", a.login)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireAuth, d.Auth.RequireCSRF)
@@ -67,7 +69,7 @@ func New(d Deps) *API {
 	})
 
 	r.Route("/admin", func(r chi.Router) {
-		r.Use(auth.RequireAuth, d.Auth.RequireCSRF)
+		r.Use(d.Auth.Authenticate, auth.RequireAuth, d.Auth.RequireCSRF)
 		g := guarded{r: r, prefix: "/api/v1/admin", perms: a.perms}
 		g.handle(http.MethodGet, "/users", auth.ActUsersManage, a.listUsers)
 		g.handle(http.MethodPost, "/users", auth.ActUsersManage, a.createUser)

@@ -24,6 +24,9 @@ func (f *Field[T]) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, &f.Value)
 }
 
+// AllowsNull marks Field as accepting an explicit JSON null (see httpx.DecodeJSON).
+func (Field[T]) AllowsNull() bool { return true }
+
 // Of returns a set, non-null field.
 func Of[T any](v T) Field[T] { return Field[T]{Set: true, Value: v} }
 
