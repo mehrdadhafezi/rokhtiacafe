@@ -14,6 +14,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
@@ -35,18 +36,20 @@ type Deps struct {
 
 // API is the /api/v1 handler plus the route→permission table used by the coverage test.
 type API struct {
-	d       Deps
-	q       *store.Queries
-	users   *users.Service
-	catalog *catalog.Service
-	handler http.Handler
-	perms   map[string]auth.Action // "METHOD /api/v1/admin/..." → action
+	d         Deps
+	q         *store.Queries
+	users     *users.Service
+	catalog   *catalog.Service
+	inventory *inventory.Service
+	handler   http.Handler
+	perms     map[string]auth.Action // "METHOD /api/v1/admin/..." → action
 }
 
 // New builds the router.
 func New(d Deps) *API {
 	a := &API{d: d, q: store.New(d.Pool), users: &users.Service{Pool: d.Pool},
-		catalog: &catalog.Service{Pool: d.Pool, Images: d.Images}, perms: map[string]auth.Action{}}
+		catalog: &catalog.Service{Pool: d.Pool, Images: d.Images}, perms: map[string]auth.Action{},
+		inventory: &inventory.Service{Pool: d.Pool, Location: d.Location}}
 
 	r := chi.NewRouter()
 
@@ -87,6 +90,13 @@ func New(d Deps) *API {
 		g.handle(http.MethodPatch, "/products/{id}/availability", auth.ActProductAvailability, a.setAvailability)
 		g.handle(http.MethodPut, "/products/{id}/image", auth.ActCatalogManage, a.putProductImage)
 		g.handle(http.MethodDelete, "/products/{id}/image", auth.ActCatalogManage, a.deleteProductImage)
+
+		g.handle(http.MethodGet, "/inventory", auth.ActInventoryViewQty, a.listInventory)
+		g.handle(http.MethodGet, "/inventory/{id}/movements", auth.ActInventoryViewCost, a.listMovements)
+		g.handle(http.MethodPost, "/inventory/{id}/adjustments", auth.ActInventoryManage, a.adjustInventory)
+		g.handle(http.MethodGet, "/purchases", auth.ActInventoryViewCost, a.listPurchases)
+		g.handle(http.MethodPost, "/purchases", auth.ActInventoryManage, a.createPurchase)
+		g.handle(http.MethodPost, "/purchases/{id}/void", auth.ActInventoryManage, a.voidPurchase)
 	})
 
 	a.handler = r
