@@ -67,5 +67,7 @@ PostgreSQL: dev/CI 17, minimum 16.
 - Integration tests need the local DB (`./scripts/dev.ps1 db-up`); each test gets its own
   throwaway database via `internal/testdb`. `REQUIRE_DB_TESTS=1` makes them fail instead of skip.
 - sqlc runs from the pinned Docker image `sqlc/sqlc:1.29.0`; commit generated `internal/store`.
-- New migrations: `backend/db/migrations/NNNNN_name.sql` with `-- +goose Up` / `-- +goose Down`.
+- New migrations: `backend/db/migrations/NNNNN_name.sql` with `-- +goose Up` (forward-only).
   They run as `rokh_owner`; grant DELETE explicitly only where DATABASE.md allows it.
+- `rokh check` verifies the app-enforced invariants (INV-3/4/7b/8/11/16); run it after data changes in tests.
+- Trigger SQLSTATEs: `RK001` delete forbidden, `RK002` immutable/append-only, `RK003` illegal order transition.

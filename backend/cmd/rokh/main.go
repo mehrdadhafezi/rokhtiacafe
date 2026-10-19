@@ -14,6 +14,7 @@ import (
 	"time"
 	_ "time/tzdata" // Asia/Tehran must resolve on Windows and minimal servers.
 
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/check"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/database"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
@@ -30,6 +31,7 @@ commands:
   serve            run the HTTP server
   migrate up       apply pending migrations (uses MIGRATION_DATABASE_URL)
   migrate status   list migrations and whether they are applied
+  check            verify app-enforced data invariants (read-only, uses DATABASE_URL)
   version          print the build version
 `
 
@@ -62,6 +64,8 @@ func run(args []string, stdout io.Writer) error {
 			return errors.New("usage: rokh migrate up|status")
 		}
 		return runMigrate(ctx, args[1], stdout)
+	case "check":
+		return runCheck(ctx, stdout)
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil
@@ -186,4 +190,33 @@ func runMigrate(ctx context.Context, cmd string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown migrate command %q (want up or status)", cmd)
 	}
+}
+
+// errCheckFailed is returned when invariants are violated, so the exit code is non-zero.
+var errCheckFailed = errors.New("invariant check failed")
+
+func runCheck(ctx context.Context, stdout io.Writer) error {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		return errors.New("DATABASE_URL is required")
+	}
+	pool, err := database.Open(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	violations, err := check.Run(ctx, store.New(pool))
+	if err != nil {
+		return err
+	}
+	if len(violations) == 0 {
+		fmt.Fprintln(stdout, "ok: all invariants hold")
+		return nil
+	}
+	for _, v := range violations {
+		fmt.Fprintln(stdout, v)
+	}
+	fmt.Fprintf(stdout, "%d violation(s)\n", len(violations))
+	return errCheckFailed
 }
