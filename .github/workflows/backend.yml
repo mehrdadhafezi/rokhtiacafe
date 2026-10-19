@@ -1,0 +1,102 @@
+name: backend
+
+# CI only: format, vet, test, build, migrations. Never deploys.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      PGPASSWORD: ci_only
+      TEST_DATABASE_ADMIN_URL: postgres://postgres:ci_only@localhost:5432/postgres?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://rokh_owner:owner_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+      DATABASE_URL: postgres://rokh_app:app_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+      REQUIRE_DB_TESTS: "1"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Bootstrap database roles (same script as local Docker)
+        run: >
+          psql -h localhost -U postgres -d postgres
+          -v owner_password=owner_ci_only -v app_password=app_ci_only -v db_name=rokhtiacafe
+          -f ../deploy/local/postgres/roles.sql
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "Files need gofmt:"; echo "$out"; exit 1; fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (with PostgreSQL integration tests)
+        run: go test -race -count=1 ./...
+
+      - name: Build
+        run: go build -trimpath -o bin/rokh ./cmd/rokh
+
+      - name: Migrations apply cleanly
+        run: |
+          ./bin/rokh migrate up
+          ./bin/rokh migrate status | tee status.txt
+          grep -q ", 0 pending" status.txt
+
+      - name: Smoke test + graceful shutdown
+        run: |
+          ./bin/rokh serve > serve.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 50); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:8080/readyz | grep -q '"ready"'
+          kill -TERM "$pid"
+          wait "$pid"
+          grep -q "server stopped" serve.log
+          cat serve.log
+
+  sqlc:
+    name: sqlc generated code is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD/backend:/src" -w /src sqlc/sqlc:1.29.0 diff
+
+  gitleaks:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 detect --source /repo --redact --verbose

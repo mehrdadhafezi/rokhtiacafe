@@ -18,11 +18,25 @@ Lightweight café management and QR ordering PWA.
 
 ## Getting started
 
-```bash
-cp .env.example .env   # then edit .env with local values
+Requirements: Go 1.27, Docker Desktop (Compose v2), PowerShell 7.
+
+```powershell
+./scripts/dev.ps1 setup   # create .env, start PostgreSQL 17 on 127.0.0.1:55432, apply migrations
+./scripts/dev.ps1 run     # API on http://127.0.0.1:8080  (GET /healthz, GET /readyz)
+./scripts/dev.ps1 check   # gofmt, go vet, build, tests incl. PostgreSQL integration, sqlc diff
 ```
 
-Backend and frontend setup instructions will be added as each is scaffolded.
+Other commands: `db-up`, `db-down`, `db-reset`, `migrate`, `status`, `build`, `fmt`, `vet`,
+`test`, `sqlc`, `sqlc-diff`, `smoke`. The server binary itself: `rokh serve | migrate up |
+migrate status | version`.
+
+Without Docker: install PostgreSQL 16+ locally, run
+`psql -U postgres -v owner_password=... -v app_password=... -v db_name=rokhtiacafe -f deploy/local/postgres/roles.sql`,
+and point `DATABASE_URL` / `MIGRATION_DATABASE_URL` / `TEST_DATABASE_ADMIN_URL` in `.env` at it.
+
+Database roles: migrations run as `rokh_owner` (`MIGRATION_DATABASE_URL`); the server runs as
+`rokh_app` (`DATABASE_URL`, DML only). The `.env.example` values are local development defaults;
+production credentials are separate and never committed.
 
 ## Design docs
 
