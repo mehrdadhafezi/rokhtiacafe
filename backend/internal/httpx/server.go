@@ -19,6 +19,7 @@ type Deps struct {
 	Logger     *slog.Logger
 	DB         Pinger
 	Production bool
+	API        http.Handler // mounted at /api/v1 when set
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -38,7 +39,9 @@ func NewRouter(d Deps) http.Handler {
 	})
 	r.Get("/readyz", readyz(d))
 
-	// Module routes are mounted under /api/v1 in later tasks (T3+).
+	if d.API != nil {
+		r.Mount("/api/v1", d.API)
+	}
 	return r
 }
 
