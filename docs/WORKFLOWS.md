@@ -184,6 +184,8 @@ else `UNPAID` (includes partially paid; UI shows "remaining X").
   cancel are **state-idempotent**: repeating them after success finds the target state already
   reached under the order lock and returns `200` without new rows.
 - Change-giving is outside the system: staff record the exact amount applied to the order.
+- A REFUND row records that money is owed back; it does not transfer money. Staff hand back cash or
+  reverse the card-terminal payment, guided by the per-method amounts the API returns.
 
 ### 3.1 Revenue, receivables and cash policy
 | Event | Revenue | COGS | Cash collected | Receivable |

@@ -13,11 +13,13 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/expenses"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/payments"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/reports"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
 )
@@ -48,6 +50,8 @@ type API struct {
 	catalog   *catalog.Service
 	inventory *inventory.Service
 	payments  *payments.Service
+	expenses  *expenses.Service
+	reports   *reports.Service
 	handler   http.Handler
 	perms     map[string]auth.Action // "METHOD /api/v1/admin/..." → action
 }
@@ -57,7 +61,9 @@ func New(d Deps) *API {
 	a := &API{d: d, q: store.New(d.Pool), users: &users.Service{Pool: d.Pool},
 		catalog: &catalog.Service{Pool: d.Pool, Images: d.Images}, perms: map[string]auth.Action{},
 		inventory: &inventory.Service{Pool: d.Pool, Location: d.Location},
-		payments:  &payments.Service{Pool: d.Pool}}
+		payments:  &payments.Service{Pool: d.Pool},
+		expenses:  &expenses.Service{Pool: d.Pool, Location: d.Location},
+		reports:   &reports.Service{Pool: d.Pool, Location: d.Location}}
 
 	r := chi.NewRouter()
 
@@ -112,6 +118,14 @@ func New(d Deps) *API {
 		g.handle(http.MethodPost, "/orders/{id}/payments", auth.ActPaymentsRecord, a.recordPayment)
 		g.handle(http.MethodPost, "/orders/{id}/refund", auth.ActPaymentsRefund, a.refundOrder)
 		g.handle(http.MethodPost, "/payments/{id}/void", auth.ActPaymentsVoid, a.voidPayment)
+
+		g.handle(http.MethodGet, "/dashboard", auth.ActDashboardView, a.dashboard)
+		g.handle(http.MethodGet, "/expenses", auth.ActExpensesManage, a.listExpenses)
+		g.handle(http.MethodPost, "/expenses", auth.ActExpensesManage, a.createExpense)
+		g.handle(http.MethodPost, "/expenses/{id}/void", auth.ActExpensesManage, a.voidExpense)
+		g.handle(http.MethodGet, "/reports/summary", auth.ActReportsView, a.reportSummary)
+		g.handle(http.MethodGet, "/reports/products", auth.ActReportsView, a.reportProducts)
+		g.handle(http.MethodGet, "/reports/receivables", auth.ActReportsView, a.reportReceivables)
 
 		g.handle(http.MethodGet, "/inventory", auth.ActInventoryViewQty, a.listInventory)
 		g.handle(http.MethodGet, "/inventory/{id}/movements", auth.ActInventoryViewCost, a.listMovements)
