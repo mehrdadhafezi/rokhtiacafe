@@ -20,6 +20,7 @@ type Deps struct {
 	DB         Pinger
 	Production bool
 	API        http.Handler // mounted at /api/v1 when set
+	Media      http.Handler // mounted at /media/ when set (product images)
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -41,6 +42,9 @@ func NewRouter(d Deps) http.Handler {
 
 	if d.API != nil {
 		r.Mount("/api/v1", d.API)
+	}
+	if d.Media != nil {
+		r.Handle("/media/*", d.Media)
 	}
 	return r
 }

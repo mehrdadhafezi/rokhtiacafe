@@ -5,11 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
@@ -24,6 +27,10 @@ type Deps struct {
 	TrustedProxies []netip.Prefix
 	LoginPerIP     *ratelimit.Limiter
 	LoginPerUser   *ratelimit.Limiter
+	PublicPerIP    *ratelimit.Limiter // general public limit; nil disables it
+	Images         *catalog.ImageStore
+	Ordering       config.OrderingHours
+	Location       *time.Location
 }
 
 // API is the /api/v1 handler plus the route→permission table used by the coverage test.
@@ -31,16 +38,23 @@ type API struct {
 	d       Deps
 	q       *store.Queries
 	users   *users.Service
+	catalog *catalog.Service
 	handler http.Handler
 	perms   map[string]auth.Action // "METHOD /api/v1/admin/..." → action
 }
 
 // New builds the router.
 func New(d Deps) *API {
-	a := &API{d: d, q: store.New(d.Pool), users: &users.Service{Pool: d.Pool}, perms: map[string]auth.Action{}}
+	a := &API{d: d, q: store.New(d.Pool), users: &users.Service{Pool: d.Pool},
+		catalog: &catalog.Service{Pool: d.Pool, Images: d.Images}, perms: map[string]auth.Action{}}
 
 	r := chi.NewRouter()
 	r.Use(d.Auth.Authenticate)
+
+	r.Route("/public", func(r chi.Router) {
+		r.Use(a.publicRateLimit)
+		r.Get("/menu", a.publicMenu)
+	})
 
 	r.Route("/auth", func(r chi.Router) {
 		r.With(d.Auth.RequireOrigin).Post("/login", a.login)
@@ -60,6 +74,17 @@ func New(d Deps) *API {
 		g.handle(http.MethodPatch, "/users/{id}", auth.ActUsersManage, a.updateUser)
 		g.handle(http.MethodPost, "/users/{id}/password", auth.ActUsersManage, a.resetPassword)
 		g.handle(http.MethodGet, "/audit-logs", auth.ActAuditView, a.listAuditLogs)
+
+		g.handle(http.MethodGet, "/categories", auth.ActCatalogView, a.listCategories)
+		g.handle(http.MethodPost, "/categories", auth.ActCatalogManage, a.createCategory)
+		g.handle(http.MethodPatch, "/categories/{id}", auth.ActCatalogManage, a.updateCategory)
+		g.handle(http.MethodGet, "/products", auth.ActCatalogView, a.listProducts)
+		g.handle(http.MethodPost, "/products", auth.ActCatalogManage, a.createProduct)
+		g.handle(http.MethodGet, "/products/{id}", auth.ActCatalogView, a.getProduct)
+		g.handle(http.MethodPatch, "/products/{id}", auth.ActCatalogManage, a.updateProduct)
+		g.handle(http.MethodPatch, "/products/{id}/availability", auth.ActProductAvailability, a.setAvailability)
+		g.handle(http.MethodPut, "/products/{id}/image", auth.ActCatalogManage, a.putProductImage)
+		g.handle(http.MethodDelete, "/products/{id}/image", auth.ActCatalogManage, a.deleteProductImage)
 	})
 
 	a.handler = r
