@@ -133,3 +133,36 @@ func TestInventoryOperatorAccess(t *testing.T) {
 		expect(t, resp, body, http.StatusForbidden, "FORBIDDEN")
 	}
 }
+
+// Review finding: a lock timeout is reported as 503 BUSY_RETRY (safe to retry), not 500.
+func TestLockTimeoutReturnsBusyRetry(t *testing.T) {
+	e := newEnv(t)
+	admin := e.newClient().login("admin", adminPassword)
+	_, _, _, soda, _ := seedCatalog(t, admin)
+
+	tx, err := e.pool.Begin(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(e.ctx)
+	if _, err := tx.Exec(e.ctx, "SELECT 1 FROM inventory_balances WHERE product_id = $1 FOR UPDATE", int64(soda)); err != nil {
+		t.Fatal(err)
+	}
+
+	key := newUUID()
+	buy := map[string]any{"product_id": soda, "quantity": 1, "unit_cost_rial": 1000, "purchased_on": today()}
+	resp, body := admin.do(http.MethodPost, "/api/v1/admin/purchases", buy, withKey(key)) // waits for lock_timeout (3s)
+	expect(t, resp, body, http.StatusServiceUnavailable, "BUSY_RETRY")
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("missing Retry-After")
+	}
+	tx.Rollback(e.ctx)
+
+	resp, body = admin.do(http.MethodPost, "/api/v1/admin/purchases", buy, withKey(key)) // retry with the same key
+	expect(t, resp, body, http.StatusCreated, "")
+	var n int
+	_ = e.pool.QueryRow(e.ctx, "SELECT count(*) FROM purchase_entries").Scan(&n)
+	if n != 1 {
+		t.Errorf("purchases after retry = %d, want 1", n)
+	}
+}

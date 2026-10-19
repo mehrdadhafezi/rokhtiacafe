@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
@@ -215,7 +216,25 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// retryableSQLStates are transient contention errors: the request did not take effect and can
+// be retried safely (with the same Idempotency-Key where one applies).
+var retryableSQLStates = map[string]bool{
+	"55P03": true, // lock_not_available (lock_timeout)
+	"57014": true, // query_canceled (statement_timeout)
+	"40P01": true, // deadlock_detected
+	"40001": true, // serialization_failure
+}
+
+// internal writes 503 BUSY_RETRY for contention errors and 500 INTERNAL otherwise.
 func (a *API) internal(w http.ResponseWriter, r *http.Request, err error) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && retryableSQLStates[pgErr.Code] {
+		a.d.Logger.Warn("request contended", "request_id", httpx.RequestIDFrom(r.Context()),
+			"route", strings.TrimSpace(r.Method+" "+r.URL.Path), "sqlstate", pgErr.Code)
+		w.Header().Set("Retry-After", "1")
+		httpx.Error(w, http.StatusServiceUnavailable, "BUSY_RETRY", "busy, please retry")
+		return
+	}
 	a.d.Logger.Error("request failed", "request_id", httpx.RequestIDFrom(r.Context()),
 		"route", strings.TrimSpace(r.Method+" "+r.URL.Path), "err", err)
 	httpx.Error(w, http.StatusInternalServerError, "INTERNAL", "internal error")

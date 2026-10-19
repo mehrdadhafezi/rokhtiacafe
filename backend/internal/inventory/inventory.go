@@ -196,7 +196,8 @@ func evaluateLowStock(ctx context.Context, q *store.Queries, p store.Product, b 
 		"type": "LOW_STOCK", "product_id": p.ID, "title": "موجودی کم",
 		"body": fmt.Sprintf("%s: %d عدد باقی مانده", p.Name, available), "url": "/admin/inventory?filter=low",
 	})
-	key := "LOW_STOCK:" + strconv.FormatInt(p.ID, 10) + ":" + strconv.FormatInt(at.Time.Unix(), 10)
+	// Microseconds: PostgreSQL's timestamp precision, so two episodes never share a key.
+	key := "LOW_STOCK:" + strconv.FormatInt(p.ID, 10) + ":" + strconv.FormatInt(at.Time.UnixMicro(), 10)
 	for _, sub := range subs {
 		if err := q.InsertNotificationEvent(ctx, store.InsertNotificationEventParams{
 			EventType: "LOW_STOCK", DedupKey: key, SubscriptionID: pgtype.Int8{Int64: sub, Valid: true},
@@ -242,7 +243,7 @@ func (s *Service) validatePurchase(in *PurchaseInput) (pgtype.Date, ValidationEr
 	d, err := time.ParseInLocation("2006-01-02", in.PurchasedOn, s.Location)
 	if err != nil {
 		bad["purchased_on"] = "YYYY-MM-DD"
-	} else if d.After(time.Now().In(s.Location).AddDate(0, 0, 1)) {
+	} else if d.Format(time.DateOnly) > time.Now().In(s.Location).Format(time.DateOnly) {
 		bad["purchased_on"] = "in the future"
 	} else {
 		// A calendar date, independent of timezone (stored as a SQL date).

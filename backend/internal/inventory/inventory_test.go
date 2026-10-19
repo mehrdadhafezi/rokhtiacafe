@@ -288,9 +288,20 @@ func TestAdjustmentRules(t *testing.T) {
 		ProductID: f.untracked, Quantity: 1, UnitCostRial: 1, PurchasedOn: f.today}); !errors.As(err, &v) {
 		t.Errorf("purchasing an UNTRACKED product: %v", err)
 	}
-	if _, _, err := f.svc.Purchase(f.ctx, f.actor, newKey(), inventory.PurchaseInput{
-		ProductID: f.tracked, Quantity: 1, UnitCostRial: 1, PurchasedOn: "2999-01-01"}); !errors.As(err, &v) {
-		t.Errorf("future purchase date: %v", err)
+	tehran, _ := time.LoadLocation("Asia/Tehran")
+	tomorrow := time.Now().In(tehran).AddDate(0, 0, 1).Format(time.DateOnly)
+	for _, d := range []string{tomorrow, "2999-01-01"} {
+		if _, _, err := f.svc.Purchase(f.ctx, f.actor, newKey(), inventory.PurchaseInput{
+			ProductID: f.tracked, Quantity: 1, UnitCostRial: 1, PurchasedOn: d}); !errors.As(err, &v) {
+			t.Errorf("future purchase date %s: %v", d, err)
+		}
+	}
+	yesterday := time.Now().In(tehran).AddDate(0, 0, -1).Format(time.DateOnly)
+	for _, d := range []string{f.today, yesterday} {
+		if _, _, err := f.svc.Purchase(f.ctx, f.actor, newKey(), inventory.PurchaseInput{
+			ProductID: f.tracked, Quantity: 1, UnitCostRial: 1, PurchasedOn: d}); err != nil {
+			t.Errorf("purchase dated %s rejected: %v", d, err)
+		}
 	}
 }
 
@@ -484,8 +495,7 @@ func TestLowStockEpisodes(t *testing.T) {
 	if f.balance().LowStockAlertedAt.Valid {
 		t.Error("inflow above threshold did not re-arm")
 	}
-	time.Sleep(1100 * time.Millisecond) // new episode gets a new dedup key (second resolution)
-	_, err = f.out(6)
+	_, err = f.out(6) // immediately: a new episode must alert even within the same second
 	f.must(err)
 	if events() != 2 {
 		t.Errorf("second episode events = %d, want 2", events())
