@@ -28,6 +28,7 @@ backups/
 dumps/
 /data/
 /deploy/data/
+**/data/uploads/
 
 # --- Node / frontend ---
 node_modules/
