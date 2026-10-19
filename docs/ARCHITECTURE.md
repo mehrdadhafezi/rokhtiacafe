@@ -3,14 +3,14 @@
 ## 1. Shape
 
 One **modular monolith**: a single Go binary that serves the REST API, the built React
-SPA (embedded with `go:embed`), uploaded images, and runs background jobs. One
-PostgreSQL database on the same host, reachable only via localhost/unix socket.
+app (two entry points, embedded with `go:embed`), uploaded images, and runs background jobs.
+One PostgreSQL (>= 16) database on the same host, reachable only via localhost/unix socket.
 
 ```mermaid
 flowchart LR
   subgraph Phone["Customer / staff phone"]
-    SPA["React PWA\n/menu · /admin"]
-    SW["Service Worker\n(push, app shell)"]
+    SPA["React app\n/menu (plain web) · /admin/ (staff PWA)"]
+    SW["Service Worker\nscope /admin/ only"]
   end
   RP["LiteSpeed/Apache or Caddy\nTLS termination · reverse proxy"]
   subgraph Host["Server (single host)"]
@@ -48,7 +48,7 @@ No ORM, no DI framework, no validation library (explicit validation functions).
 
 ```
 backend/
-  cmd/rokh/main.go          # subcommands: serve | migrate up|status | user create | vapid gen | check inventory
+  cmd/rokh/main.go          # subcommands: serve | migrate up|status | user create | vapid gen | secret gen | check
   db/
     migrations/             # goose SQL files (embedded)
     queries/                # sqlc query files, one per module
@@ -81,19 +81,22 @@ backend/
   to the error codes in [API-CONTRACT.md §2](API-CONTRACT.md#2-conventions).
 
 ### 2.4 Transactions & concurrency
-- Default isolation READ COMMITTED; correctness relies on **conditional UPDATEs**
-  (`... WHERE status = 'PENDING'`, `... WHERE on_hand - reserved >= $q`) and DB constraints,
-  not on application-level reads.
-- When several inventory rows are touched, lock in ascending `product_id` order to
-  avoid deadlocks.
-- Daily order numbers use `pg_advisory_xact_lock` keyed on business date.
-- Jobs pick rows with `FOR UPDATE SKIP LOCKED`, so a second instance would be safe.
+- Default isolation READ COMMITTED with `lock_timeout = 3s`, `statement_timeout = 10s`.
+- **Every order mutation locks the order row first** (`SELECT … FOR UPDATE`) and runs its checks
+  on the locked row; conditional UPDATEs and DB constraints remain as defence in depth.
+- **Order creation is serialized** by one global advisory lock (`LOCK_ORDER_CREATE`), which makes
+  idempotent replay, caps, and daily numbering race-free at café volume.
+- Global lock order (advisory → order → products → balances ascending → payments) prevents
+  deadlocks; see [DATABASE.md §3.1](DATABASE.md#31-lock-order).
+- Jobs claim work with `FOR UPDATE SKIP LOCKED` (expiry: one order per tx) or short leases
+  (push outbox), so a crash or a second instance cannot double-process.
+- Full per-operation contracts: [WORKFLOWS.md §0](WORKFLOWS.md#0-transaction-contracts-summary).
 
 ### 2.5 Background jobs (in-process, `jobs` ticker)
 | Job | Interval | Work |
 |-----|----------|------|
-| Expire pending orders | 30 s | Cancel PENDING orders with `expires_at < now()`, release reservations |
-| Push outbox | 10 s | Send due `notification_events`, retry with backoff |
+| Expire pending orders | 30 s | One order per tx: lock with SKIP LOCKED, cancel EXPIRED, release reservations (≤ 100/tick) |
+| Push outbox | 10 s | Claim ≤ 10 events with a 60 s lease (short tx), send outside tx (≤ 4 concurrent, 10 s timeout), finalize by claim token; expired leases are reclaimed |
 | Session cleanup | 1 h | Delete expired sessions |
 | Notification cleanup | 24 h | Delete SENT/FAILED/GONE events older than 30 days |
 
@@ -109,7 +112,8 @@ date in Asia/Tehran. Jalali calendar handled only in the frontend via
 React + TypeScript + Vite, Tailwind CSS v4, shadcn/ui (Radix), TanStack Query,
 React Hook Form + Zod, vite-plugin-pwa, React Router (only extra routing dep),
 `@fontsource-variable/vazirmatn` (self-hosted font). No global state library: cart
-uses a React context persisted to localStorage.
+uses a React context persisted to localStorage (prices in the cart are refreshed from the menu
+API on load and confirmed at checkout — `409 PRICE_CHANGED` shows a confirmation sheet).
 
 ### 3.2 Layout
 ```
@@ -123,12 +127,18 @@ frontend/src/
   lib/            # api.ts (fetch + CSRF + error mapping), money.ts, date.ts, errors-fa.ts
   styles/tokens.css
 ```
-Public and admin routes are **code-split**; the customer bundle never loads admin code.
+Two Vite entry points (multi-page build): `index.html` → customer app (`/menu…`) and
+`admin/index.html` → staff app (`/admin/…`). They share `components/` and `lib/` but are built
+as separate bundles; the customer bundle never loads admin code.
 
-### 3.3 PWA
-Single manifest, `start_url: /admin`, `scope: /`, `dir: rtl`, `lang: fa`. Service worker
-precaches the app shell; API calls are network-only (no stale prices or order states).
-The SW handles `push` and `notificationclick` (opens `/admin/inventory?filter=low`).
+### 3.3 Staff PWA
+- Manifest is linked **only** from `admin/index.html`: name «رخ تیا — پنل کارکنان», `start_url: /admin/`,
+  `scope: /admin/`, `display: standalone`, `dir: rtl`, `lang: fa`.
+- Service worker served at `/admin/sw.js` with scope `/admin/`; precaches the staff app shell only;
+  API calls are network-only (no stale prices or order states). Handles `push` and
+  `notificationclick` (opens `/admin/inventory?filter=low`).
+- Customer pages (`/menu`) have no manifest and no service worker: normal QR ordering in the
+  browser, no install prompt, ordinary HTTP caching for hashed assets (review F12).
 
 ### 3.4 Design tokens (`styles/tokens.css`)
 | Token | Light | Use |
@@ -151,21 +161,23 @@ RTL: use logical utilities only (`ms-/me-/ps-/pe-/start-/end-`); numbers rendere
 ## 4. Deployment architecture (pending server inspection)
 
 Target is the existing cPanel/CloudLinux host. The app needs: a persistent process,
-a reverse proxy from `rokh.tiacafe.ir` to `127.0.0.1:<port>`, and PostgreSQL ≥ 14.
-These are **not guaranteed** on shared hosting; see
-[IMPLEMENTATION-PLAN.md §4 Decision D1](IMPLEMENTATION-PLAN.md#4-critical-decisions).
+a reverse proxy from `rokh.tiacafe.ir` to `127.0.0.1:<port>`, PostgreSQL >= 16 with two roles,
+and outbound HTTPS to push services. These are **not guaranteed** on shared hosting, so the
+read-only feasibility assessment (T0) runs **before** implementation (review F14); see
+[IMPLEMENTATION-PLAN.md §3](IMPLEMENTATION-PLAN.md#3-hosting-feasibility-assessment-t0).
 
 Build artifact: `rokh` Linux amd64 static binary with embedded SPA + migrations.
 Runtime layout (proposal):
 ```
 ~/rokh/
   bin/rokh, bin/rokh.prev        # rollback = swap and restart
-  .env                           # 0600, not in git
+  .env                           # 0600, not in git (runtime: DATABASE_URL as rokh_app)
+  .env.migrate                   # 0600, MIGRATION_DATABASE_URL as rokh_owner; only for `rokh migrate`
   uploads/                       # product images (outside public_html)
   backups/                       # pg_dump + uploads tarballs, 14-day retention, copied off-server
 ```
 Deploy procedure (manual, owner-approved): backup → upload binary → `rokh migrate up`
-→ restart → health check → keep previous binary. Migrations are forward-only and
+(as `rokh_owner`) → restart (as `rokh_app`) → health check → `rokh check` → keep previous binary. Migrations are forward-only and
 must be backward-compatible with the previous binary for one release.
 
 ## 5. Observability

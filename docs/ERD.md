@@ -17,7 +17,8 @@ erDiagram
 
   orders ||--|{ order_items : "contains"
   orders ||--o{ payments : "settled by"
-  orders ||--o{ inventory_movements : "SALE"
+  orders ||--o{ inventory_movements : "SALE / WASTE"
+  payments |o--o| payments : "REFUND returns PAYMENT"
   purchase_entries ||--|{ inventory_movements : "PURCHASE / PURCHASE_VOID"
 
   push_subscriptions ||--o{ notification_events : "delivers"
@@ -48,6 +49,7 @@ erDiagram
     bigint price_rial
     text inventory_mode "TRACKED|UNTRACKED"
     int low_stock_threshold
+    bigint estimated_unit_cost_rial "UNTRACKED only"
     bool is_active
     bool is_available
   }
@@ -56,12 +58,14 @@ erDiagram
     int on_hand
     int reserved
     bigint inventory_value_rial
+    bigint last_unit_cost_rial
     timestamptz low_stock_alerted_at
   }
   inventory_movements {
     bigint id PK
     bigint product_id FK
-    text movement_type
+    text movement_type "PURCHASE|PURCHASE_VOID|SALE|WASTE|ADJUSTMENT_IN|ADJUSTMENT_OUT"
+    text reason_code
     int quantity_delta
     bigint value_delta_rial
     int on_hand_after
@@ -80,11 +84,14 @@ erDiagram
     bigint id PK
     date business_date
     int display_number
-    text tracking_token UK
+    bytea tracking_token_hash UK
     uuid idempotency_key UK
+    bytea client_key
     text status
-    text payment_status
     bigint total_rial
+    bigint paid_rial
+    bigint refunded_rial
+    text payment_status "GENERATED"
     timestamptz expires_at
   }
   order_items {
@@ -95,6 +102,8 @@ erDiagram
     int quantity
     bigint line_total_rial
     bigint cogs_rial
+    bigint estimated_cost_rial
+    int wasted_quantity
   }
   payments {
     bigint id PK
@@ -102,8 +111,9 @@ erDiagram
     text kind "PAYMENT|REFUND"
     text method "CASH|CARD_TERMINAL"
     bigint amount_rial
+    bigint refund_of_payment_id FK,UK
     uuid idempotency_key UK
-    timestamptz voided_at
+    timestamptz voided_at "PAYMENT only"
   }
   expenses {
     bigint id PK
@@ -121,8 +131,10 @@ erDiagram
     bigint id PK
     text dedup_key
     bigint subscription_id FK
-    text status
+    text status "PENDING|SENDING|SENT|FAILED|GONE"
     int attempts
+    uuid claim_token
+    timestamptz lease_until
   }
   audit_logs {
     bigint id PK
@@ -140,4 +152,5 @@ erDiagram
 3. `purchase_entries`, `orders`, `order_items`, `inventory_movements`
 4. `payments`, `expenses`
 5. `push_subscriptions`, `notification_events`, `audit_logs`
-6. Triggers (`forbid_delete`, `forbid_update`, `void_only_update`, `set_updated_at`)
+6. Triggers (`forbid_delete`, `forbid_update`, `order_items_guard`, `orders_guard`, `void_only_update`, `set_updated_at`)
+7. Grants: `rokh_owner` owns everything; `rokh_app` gets runtime grants ([DATABASE.md §6.1](DATABASE.md#61-roles)). The two roles themselves are created once by the setup script (local: docker-compose init; server: host tooling), not by migrations.

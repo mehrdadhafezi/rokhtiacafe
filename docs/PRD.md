@@ -1,6 +1,6 @@
 # PRD — Rokh Tia Café (MVP)
 
-Status: **Draft for architecture review** · Owner: Mehrdad Hafezi · Last updated: 2026-10-19
+Status: **Revised after architecture review (GO_WITH_CHANGES)** · Owner: Mehrdad Hafezi · Last updated: 2026-10-19
 
 ## 1. Problem
 
@@ -43,26 +43,28 @@ Full permission matrix: [SECURITY.md §3](SECURITY.md#3-permission-matrix).
 - C2 Cart: add/remove/change quantity; cart persists in the browser (localStorage).
 - C3 Optional name/label (≤ 40 chars) and note (≤ 200 chars, e.g. "بدون شکر").
 - C4 Submit order → receive a **daily order number** (e.g. «۱۷») and a private tracking link.
+  If a price changed since the menu was loaded, the customer sees the new prices and confirms before the order is placed.
 - C5 Track status (در انتظار تأیید / در حال آماده‌سازی / آماده تحویل / تحویل شد / لغو شد), auto-refreshing.
 - C6 Cancel own order while it is still PENDING.
-- C7 Clear messages when ordering is closed, busy, an item sold out, or rate-limited.
+- C7 Clear messages when ordering is closed, busy, an item sold out, a price changed, or rate-limited.
+- C8 Customers use the menu in the normal browser; they are never asked to install an app.
 
 ### 5.2 Operator + Admin (`/admin`)
 - A1 Login/logout; change own password.
 - A2 Dashboard: open orders by status, today's order count, low-stock list (ADMIN also sees today's revenue).
-- A3 Orders board: accept → mark ready → complete; cancel with note; audible/visual cue for new orders while the tab is open.
-- A4 Record payment (CASH / CARD_TERMINAL); split tender allowed.
+- A3 Orders board: accept → mark ready → complete; cancel with note; when cancelling a PREPARING/READY order, mark items already made or opened as **wasted**; audible/visual cue for new orders while the app is open.
+- A4 Record payment (CASH / CARD_TERMINAL) once an order is accepted; split tender allowed. Cancelling an order that was already paid refunds that money automatically and tells staff how much to hand back per method.
 - A5 Toggle product "sold out" (`is_available`).
-- A6 Enable Web Push on their device (button-initiated) for low-stock alerts (ADMIN).
+- A6 Install the **staff app** (`/admin/`) on their phone. ADMIN enables Web Push there (button-initiated) for low-stock alerts.
 
 ### 5.3 Admin only
 - B1 Categories: create, rename, reorder, deactivate.
-- B2 Products: create, edit, price, image, deactivate, inventory mode (TRACKED/UNTRACKED), low-stock threshold.
+- B2 Products: create, edit, price, image, deactivate, inventory mode (TRACKED/UNTRACKED), low-stock threshold, optional estimated unit cost for made-to-order items.
 - B3 Purchases: record stock purchases for tracked products (qty, unit cost); void with reason.
 - B4 Inventory: view on-hand / reserved / available / average cost; adjust in/out with mandatory reason; movement history.
 - B5 Expenses: record by category; void with reason.
-- B6 Refund a paid order; void a mistaken payment.
-- B7 Reports: daily & monthly (Jalali) revenue, orders, AOV, product sales, COGS, gross profit, expenses, estimated operating result, cash vs card collected.
+- B6 Refund a completed, fully paid order; void a mistaken payment; switch public ordering off in an emergency.
+- B7 Reports: daily & monthly (Jalali) revenue, orders, AOV, product sales, COGS, gross profit, expenses, estimated operating result, cash vs card collected, receivables, plus a separate **estimated product margin** view.
 - B8 Users: create operators/admins, deactivate, reset password.
 - B9 Audit log viewer.
 
@@ -71,11 +73,14 @@ Full permission matrix: [SECURITY.md §3](SECURITY.md#3-permission-matrix).
 | Topic | Decision |
 |-------|----------|
 | Currency | Stored as BIGINT **rials**; shown as **tomans** (rial ÷ 10) with Persian digits |
-| Made-to-order drinks | `UNTRACKED` products: no stock; COGS = 0; ingredient purchases are expenses. See [DATABASE.md §5](DATABASE.md#5-cost-model) |
+| Made-to-order drinks | `UNTRACKED` products: no stock; actual COGS = 0; ingredient purchases are expenses. Optional estimated unit cost feeds a separate margin view, never the operating result. See [DATABASE.md §5](DATABASE.md#5-cost-model) |
 | Packaged goods | `TRACKED` products: integer stock, reservations, moving weighted average cost |
-| Pending orders | Expire after **20 min** without acceptance → auto-cancel, stock released |
-| Price changes | Order keeps the price shown at creation; cost snapshot taken at completion |
-| Paid + cancel | A PAID order cannot be cancelled until refunded |
+| Pending orders | Must be accepted within **20 min**; otherwise auto-cancelled, stock released |
+| Price changes | Customer confirms changed prices before ordering; order keeps the confirmed price; cost snapshot taken at completion |
+| Payments | Recorded only after acceptance; cancelling refunds any prepayment; completed orders refunded in full by ADMIN |
+| Revenue | Recognised at completion; refunds of completed orders reduce revenue; unpaid completed orders are receivables |
+| Cancel after preparation | Staff mark wasted items; wasted stock is an inventory loss |
+| Staff app | Installable PWA at `/admin/` only; the customer menu is a normal web page |
 | Live updates | Polling (customer 5 s, admin 5 s); no WebSocket/SSE in MVP |
 | Ordering hours | Configured opening hours; outside them the menu is view-only |
 | Calendar | Jalali dates in UI; reports by Asia/Tehran business day |
@@ -84,7 +89,7 @@ Full permission matrix: [SECURITY.md §3](SECURITY.md#3-permission-matrix).
 
 - Persian, RTL, mobile-first, WCAG 2.1 AA contrast, 44×44 px minimum touch targets.
 - Customer menu: first load ≤ 200 KB JS gzipped for the public route; LCP < 2.5 s on mid-range Android over 4G.
-- Single server, single process; ~ hundreds of orders/day.
+- Single server, single process; ~ hundreds of orders/day; PostgreSQL >= 16.
 - No secrets in repo; PostgreSQL never public.
 - Financial and inventory history is append-only (void/reverse, never delete).
 

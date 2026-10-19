@@ -4,7 +4,7 @@ Lightweight café management and QR ordering PWA.
 
 - Production: https://rokh.tiacafe.ir (not deployed from this repo yet)
 - Status: architecture & design docs under review — no business features implemented yet.
-- Stack: Go 1.27 · chi · pgx · sqlc · goose · PostgreSQL · React + TS + Vite · Tailwind · shadcn/ui · PWA
+- Stack: Go 1.27 · chi · pgx · sqlc · goose · PostgreSQL 16+ · React + TS + Vite · Tailwind · shadcn/ui · PWA
 
 ## Layout
 
@@ -35,7 +35,8 @@ Backend and frontend setup instructions will be added as each is scaffolded.
 | [WORKFLOWS](docs/WORKFLOWS.md) | Order, inventory, payment, push, auth flows |
 | [SECURITY](docs/SECURITY.md) | Threats, permission matrix, controls |
 | [ACCEPTANCE](docs/ACCEPTANCE.md) | Testable acceptance criteria |
-| [IMPLEMENTATION-PLAN](docs/IMPLEMENTATION-PLAN.md) | Tasks, decisions, production inspection checklist |
+| [IMPLEMENTATION-PLAN](docs/IMPLEMENTATION-PLAN.md) | Tasks, decisions, hosting assessment, owner decisions |
+| [REVIEW-RESPONSE](docs/REVIEW-RESPONSE.md) | Architecture review findings F1–F14 and their dispositions |
 
 ## Workflow
 

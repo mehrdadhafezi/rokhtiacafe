@@ -6,8 +6,9 @@
 |-------|--------------|------------------|
 | Admin accounts | Credential stuffing, brute force, session theft | argon2id, login rate limits, HttpOnly/Secure cookies, server-side sessions |
 | Financial records | Tampering, silent deletion | RBAC, append-only triggers, void-with-reason, audit log |
-| Stock | Fake/overflow orders reserving all stock | Rate limits, global pending cap, 20-min expiry, ordering hours, quantity limits |
-| Customer orders | Enumeration of other customers' orders | 128-bit random tracking tokens; no sequential public ids |
+| Stock | Fake/overflow orders reserving all stock | Layered limits (§5), serialized global + per-client pending caps, 20-min expiry, ordering hours, kill switch |
+| Customer orders | Enumeration or leakage of order links | 256-bit HMAC-derived tokens, stored hashed, sent in a header, 24 h lifetime (§10) |
+| Server network | SSRF through push subscription endpoints | Push-host allowlist + public-IP-only dialer (§12) |
 | Server | Malicious uploads, SQLi, XSS | Image re-encoding, sqlc parameterised queries, CSP, React escaping |
 | Secrets | Leak via public repo | `.gitignore`, `.env.example` placeholders only, secret scanning in CI |
 
@@ -30,12 +31,14 @@ every admin route declares its action; a test asserts each registered route has 
 | List/view orders | ✅ | ✅ |
 | Accept / ready / complete / cancel order | ✅ | ✅ |
 | Record payment | ✅ | ✅ |
-| Refund, void payment | – | ✅ |
+| Cancel an order that holds a prepayment (auto-refund of that prepayment) | ✅ | ✅ |
+| Refund a completed order, void payment | – | ✅ |
+| Switch public ordering off/on (kill switch) | – | ✅ |
 | View categories/products | ✅ | ✅ |
 | Toggle product sold-out | ✅ | ✅ |
 | Create/edit categories & products, prices, images | – | ✅ |
 | View stock levels (qty) | ✅ | ✅ |
-| View costs / inventory value / movements | – | ✅ |
+| View costs / inventory value / movements / estimated unit costs | – | ✅ |
 | Purchases, adjustments, voids | – | ✅ |
 | Expenses | – | ✅ |
 | Reports | – | ✅ |
@@ -54,15 +57,22 @@ from `X-Forwarded-For` **only** when the direct peer is in `TRUSTED_PROXIES`.
 
 | Scope | Limit |
 |-------|-------|
-| `POST /auth/login` per IP | 10 / 15 min |
+| `POST /auth/login` per IP | 20 / 15 min |
 | `POST /auth/login` per username | 5 / 15 min |
-| `POST /public/orders` per IP | 10 / 10 min (generous: café Wi-Fi customers share one IP) |
-| `GET /public/orders/{token}` per IP | 120 / min |
-| Other public per IP | 300 / min |
-| Global pending orders | `ORDER_MAX_PENDING` (default 40) → `503 ORDERING_BUSY` |
+| `POST /public/orders` per IP | 30 / 10 min |
+| `POST /public/orders` per `X-Client-Id` | 6 / 10 min |
+| Open PENDING orders per client network (`client_key`) | `ORDER_MAX_PENDING_PER_CLIENT` (default 15), checked in the DB under the creation lock |
+| Global open PENDING orders | `ORDER_MAX_PENDING` (default 40) → `503 ORDERING_BUSY`, under the creation lock |
+| `GET /public/order` per IP | 240 / min |
+| Other public per IP | 600 / min |
 
-Plus: ordering hours, 15 lines × 20 qty max, 20-minute expiry, customer cancel.
-Limits reset on restart (acceptable for a single-instance app).
+**Shared IPs are the normal case (F11):** customers on the café Wi-Fi share one public IP, and
+Iranian mobile carriers use carrier-grade NAT, so many unrelated customers can share an IP too.
+Per-IP limits are therefore loose and act only against bulk abuse. The per-device `X-Client-Id`
+limit is tighter but spoofable; the real backstops are the serialized pending caps, the 20-minute
+expiry, staff cancellation, and the ADMIN kill switch (`PUT /admin/ordering`). A replay of an
+existing idempotency key is not counted against the limits.
+Limits reset on restart (acceptable for a single-instance app). Values are owner decision O6.
 
 ## 6. Input validation
 - Strict JSON decoding (`DisallowUnknownFields`), body size limits, explicit per-field validation in Go; mirrored Zod schemas in the frontend for UX only — the server is authoritative.
@@ -82,16 +92,49 @@ Limits reset on restart (acceptable for a single-instance app).
 - Panic recovery returns `500 INTERNAL` without stack traces; details only in logs with request id.
 
 ## 9. Data & secrets
-- PostgreSQL bound to localhost/unix socket; app role is owner of its schema only (no superuser, no `CREATEROLE`).
-- Secrets only in server `.env` (mode 0600): `DATABASE_URL`, `VAPID_PRIVATE_KEY`. Never logged.
+- PostgreSQL bound to localhost/unix socket.
+- **Two database roles (F6):** `rokh_owner` runs migrations and owns all objects; the server runs as
+  `rokh_app` with DML-only grants and no DELETE on financial/inventory/audit tables, so it cannot
+  drop or disable the protective triggers. Neither is superuser, `CREATEROLE` or `CREATEDB`.
+  Details: [DATABASE.md §6](DATABASE.md#6-protection-triggers-and-database-roles).
+  `MIGRATION_DATABASE_URL` is only present when running `rokh migrate`, not in the service environment.
+- Secrets only in server `.env` (mode 0600): `DATABASE_URL`, `APP_SECRET_KEY`, `VAPID_PRIVATE_KEY`. Never logged.
 - Logs exclude passwords, cookies, CSRF tokens, tracking tokens (logged as prefix only), push keys.
 - Backups encrypted at rest when copied off-server; restore tested before go-live.
 - CI runs `gitleaks` on every push/PR.
 
-## 10. Tracking tokens
-Stored in plaintext (unique index) so idempotent replays can return them. Justification:
-a token only grants viewing that order and cancelling it while PENDING; anyone who can read
-the DB already sees all orders. 128 bits of entropy (22 base64url chars).
+## 10. Tracking tokens (F11)
+- Token = base64url(HMAC-SHA256(`APP_SECRET_KEY`, `"trk:" || idempotency_key`)) — 256 bits, unguessable
+  without the server key. The server can re-derive it for idempotent replays, so it never stores it.
+- DB stores only `SHA-256(token)` (`orders.tracking_token_hash`); a DB leak does not reveal usable links.
+- Sent only in the `X-Tracking-Token` header; the customer page keeps it in the URL fragment
+  (`/menu/order#…`) and localStorage, so it never reaches access logs, proxies, or `Referer`.
+- Valid for 24 h after order creation. Grants only: view that order; cancel it while PENDING.
+- Rotating `APP_SECRET_KEY` invalidates outstanding links (acceptable: they are short-lived).
 
-## 11. Out of scope for MVP
+## 11. Staff PWA separation (F12)
+Only the staff app (`/admin/`) has a web app manifest and a service worker, scoped to `/admin/`.
+Customer pages under `/menu` have no manifest, no service worker, and never download admin code,
+so customers are not prompted to install the staff app and nothing admin-related is cached on
+their phones.
+
+## 12. Web Push endpoint safety (F11)
+Push subscription endpoints are URLs supplied by a browser, and the server makes outbound
+requests to them, so they are treated as untrusted:
+- Allowlist of push-service hosts (exact host or listed suffix): `fcm.googleapis.com`,
+  `updates.push.services.mozilla.com`, `web.push.apple.com`, `*.notify.windows.com`.
+  Configurable via `PUSH_HOST_ALLOWLIST`; checked on subscribe and again before every send.
+- `https` only, port 443, no userinfo, no IP-literal hosts, length ≤ 2048.
+- Custom dialer resolves the host and refuses loopback, private (RFC 1918/4193), link-local,
+  CGNAT, multicast and unspecified addresses; connects to the vetted IP (no DNS-rebinding gap).
+- No redirects followed; 10 s timeout; response body discarded after 4 KB.
+- Only ADMIN users can register subscriptions.
+
+## 13. Admin membership races (F11)
+Deactivation, role change and user creation take `pg_advisory_xact_lock(LOCK_ADMIN_MEMBERSHIP)`
+before checking "at least one active ADMIN", so two admins demoting each other concurrently
+cannot both succeed. Session revocation happens in the same transaction, and every request
+re-checks `users.is_active` and `role` via the session join (no cached role in the cookie).
+
+## 14. Out of scope for MVP
 2FA, account lockout emails, WAF, per-device session management UI, field-level encryption.
