@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -82,11 +83,34 @@ func TestOperatorCancelRefundsPrepayment(t *testing.T) {
 	_, list := op.do(http.MethodGet, "/api/v1/admin/orders", nil)
 	id := list["items"].([]any)[0].(map[string]any)["id"].(float64)
 	op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/accept", id), nil)
-	op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/payments", id), map[string]any{"method": "CASH", "amount_rial": 950000}, withKey(newUUID()))
+	// Split prepayment: part cash, part card.
+	op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/payments", id), map[string]any{"method": "CASH", "amount_rial": 500000}, withKey(newUUID()))
+	op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/payments", id), map[string]any{"method": "CARD_TERMINAL", "amount_rial": 450000}, withKey(newUUID()))
 
 	resp, body := op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/cancel", id), map[string]any{"note": "out of milk"})
 	expect(t, resp, body, http.StatusOK, "")
 	if body["status"] != "CANCELLED" || body["payment_status"] != "REFUNDED" || body["refunded_rial"].(float64) != 950000 {
 		t.Errorf("cancel = %v", body)
+	}
+	// API-CONTRACT §5.2: the response says how much to hand back per method.
+	refunds, _ := json.Marshal(body["refunds"])
+	if string(refunds) != `[{"amount_rial":500000,"method":"CASH"},{"amount_rial":450000,"method":"CARD_TERMINAL"}]` {
+		t.Errorf("refunds = %s", refunds)
+	}
+	// Repeating the cancel refunds nothing more.
+	resp, body = op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/cancel", id), nil)
+	expect(t, resp, body, http.StatusOK, "")
+	if r, ok := body["refunds"].([]any); !ok || len(r) != 0 {
+		t.Errorf("repeat cancel refunds = %v", body["refunds"])
+	}
+
+	// An order without money returns an empty refund list.
+	placeOrder(e.newClient(), newUUID(), line(espresso, 1, 950000))
+	_, list = op.do(http.MethodGet, "/api/v1/admin/orders?status=PENDING", nil)
+	unpaid := list["items"].([]any)[0].(map[string]any)["id"].(float64)
+	resp, body = op.do(http.MethodPost, fmt.Sprintf("/api/v1/admin/orders/%v/cancel", unpaid), nil)
+	expect(t, resp, body, http.StatusOK, "")
+	if r, ok := body["refunds"].([]any); !ok || len(r) != 0 {
+		t.Errorf("unpaid cancel refunds = %v", body["refunds"])
 	}
 }

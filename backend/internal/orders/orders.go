@@ -131,7 +131,9 @@ type Detail struct {
 	Order    store.Order
 	Items    []store.OrderItem
 	Payments []store.Payment // payment and refund rows, oldest first
-	Token    string
+	// RefundedNow lists the REFUND rows created by this cancellation (money to hand back).
+	RefundedNow []store.Payment
+	Token       string
 }
 
 // ---- tokens & keys ----
@@ -455,7 +457,7 @@ func (s *Service) CustomerCancel(ctx context.Context, token string, ip netip.Add
 				reason = ReasonExpired // past its deadline: expire rather than record a customer cancel
 				actor = audit.Actor{Kind: audit.KindSystem}
 			}
-			o, err = s.cancelLocked(ctx, q, o, reason, "", actor, nil, false)
+			o, _, err = s.cancelLocked(ctx, q, o, reason, "", actor, nil, false)
 			if err != nil {
 				return err
 			}
@@ -516,7 +518,8 @@ func (s *Service) Accept(ctx context.Context, actor audit.Actor, id int64) (Deta
 		}
 		if !now.Time.Before(o.ExpiresAt.Time) {
 			expired = true
-			return s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil, false)
+			n, _, err := s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil, false)
+			return n, err
 		}
 		n, err := q.AcceptOrder(ctx, store.AcceptOrderParams{ID: o.ID, By: userBy(actor)})
 		if err != nil {
@@ -616,7 +619,8 @@ func (s *Service) Cancel(ctx context.Context, actor audit.Actor, id int64, in Ca
 	if textutil.Len(in.Note) > 200 {
 		return Detail{}, ValidationError{"note": "at most 200 characters"}
 	}
-	return s.withLockedOrder(ctx, id, func(q *store.Queries, o store.Order) (store.Order, error) {
+	var refunds []store.Payment
+	d, err := s.withLockedOrder(ctx, id, func(q *store.Queries, o store.Order) (store.Order, error) {
 		switch o.Status {
 		case StatusCancelled:
 			return o, nil
@@ -627,27 +631,31 @@ func (s *Service) Cancel(ctx context.Context, actor audit.Actor, id int64, in Ca
 		if len(in.Waste) > 0 && o.Status == StatusPending {
 			return o, ValidationError{"waste": "only for orders already being prepared"}
 		}
-		return s.cancelLocked(ctx, q, o, ReasonStaff, in.Note, actor, in.Waste, in.AllowRefund)
+		n, r, err := s.cancelLocked(ctx, q, o, ReasonStaff, in.Note, actor, in.Waste, in.AllowRefund)
+		refunds = r
+		return n, err
 	})
+	d.RefundedNow = refunds
+	return d, err
 }
 
 // cancelLocked cancels an order whose row is locked by the caller. Money held for the order is
 // refunded first, one REFUND per PAYMENT (docs/WORKFLOWS.md §1.5 step 4), so the cancelled order
 // never keeps money (DB CHECK orders_no_money_when_cancelled).
-func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Order, reason, note string, actor audit.Actor, waste []WasteLine, allowRefund bool) (store.Order, error) {
+func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Order, reason, note string, actor audit.Actor, waste []WasteLine, allowRefund bool) (store.Order, []store.Payment, error) {
 	var refunds []store.Payment
 	if o.PaidRial != o.RefundedRial {
 		if !allowRefund || actor.Kind != audit.KindUser {
-			return o, ErrPaymentState
+			return o, nil, ErrPaymentState
 		}
 		var err error
 		if refunds, o, err = payments.RefundAll(ctx, q, o, actor); err != nil {
-			return o, err
+			return o, nil, err
 		}
 	}
 	items, err := q.ListOrderItems(ctx, o.ID)
 	if err != nil {
-		return o, err
+		return o, nil, err
 	}
 	byProduct := make(map[int64]store.OrderItem, len(items))
 	for _, it := range items {
@@ -658,11 +666,11 @@ func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Or
 		it, ok := byProduct[w.ProductID]
 		switch {
 		case !ok:
-			return o, ValidationError{fmt.Sprintf("waste[%d].product_id", i): "not in this order"}
+			return o, nil, ValidationError{fmt.Sprintf("waste[%d].product_id", i): "not in this order"}
 		case wasted[w.ProductID] != 0:
-			return o, ValidationError{fmt.Sprintf("waste[%d].product_id", i): "duplicate"}
+			return o, nil, ValidationError{fmt.Sprintf("waste[%d].product_id", i): "duplicate"}
 		case w.Quantity < 1 || w.Quantity > it.Quantity:
-			return o, ValidationError{fmt.Sprintf("waste[%d].quantity", i): fmt.Sprintf("1-%d", it.Quantity)}
+			return o, nil, ValidationError{fmt.Sprintf("waste[%d].quantity", i): fmt.Sprintf("1-%d", it.Quantity)}
 		}
 		wasted[w.ProductID] = w.Quantity
 	}
@@ -674,12 +682,12 @@ func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Or
 			if w > 0 {
 				cost, err := inventory.ConsumeReserved(ctx, q, it.ProductID, w, inventory.TypeWaste, o.ID, actor)
 				if err != nil {
-					return o, err
+					return o, nil, err
 				}
 				wasteCost += cost
 			}
 			if err := inventory.Release(ctx, q, it.ProductID, it.Quantity-w); err != nil {
-				return o, err
+				return o, nil, err
 			}
 		}
 		if w > 0 {
@@ -687,20 +695,20 @@ func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Or
 			if it.InventoryMode == "UNTRACKED" {
 				est, err := q.GetProductEstimate(ctx, it.ProductID)
 				if err != nil {
-					return o, err
+					return o, nil, err
 				}
 				if est.Valid {
 					params.EstimatedCostRial = pgtype.Int8{Int64: est.Int64 * int64(w), Valid: true}
 				}
 			}
 			if err := q.SetOrderItemWaste(ctx, params); err != nil {
-				return o, err
+				return o, nil, err
 			}
 		}
 	}
 	n, err := q.CancelOrder(ctx, store.CancelOrderParams{ID: o.ID, Reason: text(reason), Note: text(note), By: userBy(actor)})
 	if err != nil {
-		return o, err
+		return o, nil, err
 	}
 	details := map[string]any{"reason": reason}
 	if len(refunds) > 0 {
@@ -718,7 +726,7 @@ func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Or
 	if reason == ReasonExpired {
 		action = "order.expire"
 	}
-	return n, record(ctx, q, actor, action, n, details)
+	return n, refunds, record(ctx, q, actor, action, n, details)
 }
 
 // ExpireDue cancels PENDING orders past their acceptance deadline, one order per transaction
@@ -740,7 +748,7 @@ func (s *Service) ExpireDue(ctx context.Context) (int, error) {
 				return err
 			}
 			found = true
-			_, err = s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil, false)
+			_, _, err = s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil, false)
 			return err
 		})
 		if err != nil {

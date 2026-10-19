@@ -364,7 +364,36 @@ func (a *API) cancelOrder(w http.ResponseWriter, r *http.Request) {
 		a.writeOrderError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, toAdminOrder(d, canSeeCost(r)))
+	httpx.JSON(w, http.StatusOK, cancelView{adminOrderView: toAdminOrder(d, canSeeCost(r)), Refunds: refundSummary(d.RefundedNow)})
+}
+
+// refundLine is money to hand back for one payment method (docs/API-CONTRACT.md §5.2).
+type refundLine struct {
+	Method     string `json:"method"`
+	AmountRial int64  `json:"amount_rial"`
+}
+
+// cancelView is the cancellation response: the order plus what this cancellation refunded.
+type cancelView struct {
+	adminOrderView
+	Refunds []refundLine `json:"refunds"`
+}
+
+// refundSummary totals refunds per method, cash first; empty when nothing was refunded.
+func refundSummary(refunds []store.Payment) []refundLine {
+	out := []refundLine{}
+	for _, method := range []string{"CASH", "CARD_TERMINAL"} {
+		var sum int64
+		for _, r := range refunds {
+			if r.Method == method {
+				sum += r.AmountRial
+			}
+		}
+		if sum > 0 {
+			out = append(out, refundLine{Method: method, AmountRial: sum})
+		}
+	}
+	return out
 }
 
 // PUT /admin/ordering {open} — emergency kill switch (in memory, audited).
