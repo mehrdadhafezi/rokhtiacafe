@@ -11,8 +11,11 @@ import (
 )
 
 type Querier interface {
+	AcceptOrder(ctx context.Context, arg AcceptOrderParams) (Order, error)
 	// Serializes a class of operations for the rest of the transaction (docs/DATABASE.md §3.1).
 	AdvisoryXactLock(ctx context.Context, key int64) error
+	AvailableStock(ctx context.Context, ids []int64) ([]AvailableStockRow, error)
+	CancelOrder(ctx context.Context, arg CancelOrderParams) (Order, error)
 	// INV-16 (only meaningful once users exist).
 	CheckActiveAdminExists(ctx context.Context) (CheckActiveAdminExistsRow, error)
 	// INV-4: on_hand and inventory value equal the sums of the movement ledger.
@@ -31,12 +34,23 @@ type Querier interface {
 	CheckReservedMatchesOpenOrders(ctx context.Context) ([]CheckReservedMatchesOpenOrdersRow, error)
 	CheckTrackedProductsHaveBalance(ctx context.Context) ([]int64, error)
 	ClearLowStockAlerted(ctx context.Context, productID int64) error
+	CompleteOrder(ctx context.Context, arg CompleteOrderParams) (Order, error)
+	// SALE / WASTE: reserved units leave physical stock at average cost.
+	ConsumeReservedStock(ctx context.Context, arg ConsumeReservedStockParams) (InventoryBalance, error)
 	CountActiveAdmins(ctx context.Context) (int64, error)
+	CountPendingOrders(ctx context.Context) (int64, error)
+	CountPendingOrdersForClient(ctx context.Context, clientKey []byte) (int64, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
+	CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error)
+	CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) (OrderItem, error)
 	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
 	CreatePurchase(ctx context.Context, arg CreatePurchaseParams) (PurchaseEntry, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	// Orders (docs/DATABASE.md §2.8–2.9, docs/WORKFLOWS.md §1).
+	// Every order mutation starts with GetOrderForUpdate; status UPDATEs keep a WHERE guard on the
+	// expected status as defence in depth.
+	DBNow(ctx context.Context) (pgtype.Timestamptz, error)
 	DeleteExpiredSessions(ctx context.Context, idleCutoff pgtype.Timestamptz) (int64, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 	DeleteUserSessions(ctx context.Context, userID int64) error
@@ -47,11 +61,17 @@ type Querier interface {
 	GetCategoryForUpdate(ctx context.Context, id int64) (Category, error)
 	GetInventoryBalanceForUpdate(ctx context.Context, productID int64) (InventoryBalance, error)
 	GetMovementByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (InventoryMovement, error)
+	GetOrder(ctx context.Context, id int64) (Order, error)
+	GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Order, error)
+	GetOrderByTrackingHash(ctx context.Context, trackingTokenHash []byte) (Order, error)
+	GetOrderForUpdate(ctx context.Context, id int64) (Order, error)
 	GetProduct(ctx context.Context, id int64) (Product, error)
+	GetProductEstimate(ctx context.Context, id int64) (pgtype.Int8, error)
 	// Inventory: balances, the movement ledger and purchases (docs/DATABASE.md §2.5–2.7, §5.1).
 	// Lock order (§3.1): products FOR SHARE → inventory_balances FOR UPDATE.
 	GetProductForShare(ctx context.Context, id int64) (Product, error)
 	GetProductForUpdate(ctx context.Context, id int64) (Product, error)
+	GetProductsForOrder(ctx context.Context, ids []int64) ([]GetProductsForOrderRow, error)
 	GetPurchaseByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (PurchaseEntry, error)
 	GetPurchaseForUpdate(ctx context.Context, id int64) (PurchaseEntry, error)
 	GetPurchaseMovement(ctx context.Context, purchaseEntryID pgtype.Int8) (InventoryMovement, error)
@@ -72,14 +92,27 @@ type Querier interface {
 	// Tracked products with their balance; products without a balance row show zeros.
 	ListInventory(ctx context.Context) ([]ListInventoryRow, error)
 	ListMovements(ctx context.Context, arg ListMovementsParams) ([]InventoryMovement, error)
+	ListOrderItems(ctx context.Context, orderID int64) ([]OrderItem, error)
+	ListOrderItemsForOrders(ctx context.Context, orderIds []int64) ([]OrderItem, error)
+	ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
 	ListPurchases(ctx context.Context, arg ListPurchasesParams) ([]PurchaseEntry, error)
 	ListUsers(ctx context.Context) ([]User, error)
+	MarkOrderReady(ctx context.Context, id int64) (Order, error)
+	// Called only under LOCK_ORDER_CREATE, so the number is unique and gap-free per business date.
+	NextDisplayNumber(ctx context.Context, businessDate pgtype.Date) (int32, error)
+	// One order per transaction; the lock taken here is the one held while it is cancelled (F2).
+	NextExpiredPendingOrder(ctx context.Context) (int64, error)
 	// Readiness probe: proves the runtime role can run a query.
 	Ping(ctx context.Context) (int32, error)
 	// Active categories and products only. Exact stock is never exposed, only availability.
 	PublicMenu(ctx context.Context) ([]PublicMenuRow, error)
+	ReleaseReservation(ctx context.Context, arg ReleaseReservationParams) (InventoryBalance, error)
+	// Atomic reservation: succeeds only while enough is available (no oversell).
+	ReserveStock(ctx context.Context, arg ReserveStockParams) (InventoryBalance, error)
 	SetLowStockAlerted(ctx context.Context, productID int64) (pgtype.Timestamptz, error)
+	SetOrderItemCost(ctx context.Context, arg SetOrderItemCostParams) error
+	SetOrderItemWaste(ctx context.Context, arg SetOrderItemWasteParams) error
 	SetProductAvailability(ctx context.Context, arg SetProductAvailabilityParams) (Product, error)
 	SetProductImage(ctx context.Context, arg SetProductImageParams) (Product, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error

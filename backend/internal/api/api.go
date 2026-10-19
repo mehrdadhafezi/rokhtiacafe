@@ -15,6 +15,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
@@ -32,6 +33,10 @@ type Deps struct {
 	Images         *catalog.ImageStore
 	Ordering       config.OrderingHours
 	Location       *time.Location
+	Orders         *orders.Service
+	OrderPerIP     *ratelimit.Limiter // POST /public/orders per IP
+	OrderPerClient *ratelimit.Limiter // POST /public/orders per X-Client-Id
+	TrackPerIP     *ratelimit.Limiter // tracking + customer cancel per IP
 }
 
 // API is the /api/v1 handler plus the route→permission table used by the coverage test.
@@ -58,6 +63,9 @@ func New(d Deps) *API {
 	r.Route("/public", func(r chi.Router) {
 		r.Use(a.publicRateLimit)
 		r.Get("/menu", a.publicMenu)
+		r.Post("/orders", a.createOrder)
+		r.Get("/order", a.trackOrder)
+		r.Post("/order/cancel", a.customerCancel)
 	})
 
 	r.Route("/auth", func(r chi.Router) {
@@ -90,6 +98,14 @@ func New(d Deps) *API {
 		g.handle(http.MethodPatch, "/products/{id}/availability", auth.ActProductAvailability, a.setAvailability)
 		g.handle(http.MethodPut, "/products/{id}/image", auth.ActCatalogManage, a.putProductImage)
 		g.handle(http.MethodDelete, "/products/{id}/image", auth.ActCatalogManage, a.deleteProductImage)
+
+		g.handle(http.MethodGet, "/orders", auth.ActOrdersView, a.listOrders)
+		g.handle(http.MethodGet, "/orders/{id}", auth.ActOrdersView, a.getOrder)
+		g.handle(http.MethodPost, "/orders/{id}/accept", auth.ActOrdersTransition, a.transition(opAccept))
+		g.handle(http.MethodPost, "/orders/{id}/ready", auth.ActOrdersTransition, a.transition(opReady))
+		g.handle(http.MethodPost, "/orders/{id}/complete", auth.ActOrdersTransition, a.transition(opComplete))
+		g.handle(http.MethodPost, "/orders/{id}/cancel", auth.ActOrdersTransition, a.cancelOrder)
+		g.handle(http.MethodPut, "/ordering", auth.ActOrderingToggle, a.setOrdering)
 
 		g.handle(http.MethodGet, "/inventory", auth.ActInventoryViewQty, a.listInventory)
 		g.handle(http.MethodGet, "/inventory/{id}/movements", auth.ActInventoryViewCost, a.listMovements)

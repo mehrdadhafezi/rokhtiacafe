@@ -330,7 +330,7 @@ func (a *API) publicMenu(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := json.Marshal(map[string]any{
 		"ordering": orderingView{
-			Open:    a.d.Ordering.IsOpen(time.Now(), a.d.Location),
+			Open:    a.orderingOpen(time.Now()),
 			OpensAt: a.d.Ordering.Opens(), ClosesAt: a.d.Ordering.Closes(),
 		},
 		"categories": cats,
@@ -363,4 +363,12 @@ func (a *API) publicRateLimit(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// orderingOpen combines ordering hours with the staff kill switch.
+func (a *API) orderingOpen(now time.Time) bool {
+	if a.d.Orders != nil {
+		return a.d.Orders.IsOpen(now)
+	}
+	return a.d.Ordering.IsOpen(now, a.d.Location)
 }

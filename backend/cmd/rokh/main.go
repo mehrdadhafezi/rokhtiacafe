@@ -29,6 +29,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/database"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/migrate"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
@@ -44,6 +45,7 @@ commands:
   migrate up       apply pending migrations (uses MIGRATION_DATABASE_URL)
   migrate status   list migrations and whether they are applied
   check            verify app-enforced data invariants (read-only, uses DATABASE_URL)
+  secret gen       print a new random APP_SECRET_KEY
   user create      create a staff account; password is read from stdin
                    flags: -username NAME -display-name NAME -role ADMIN|OPERATOR
   version          print the build version
@@ -80,6 +82,12 @@ func run(args []string, stdout io.Writer) error {
 		return runMigrate(ctx, args[1], stdout)
 	case "check":
 		return runCheck(ctx, stdout)
+	case "secret":
+		if len(args) != 2 || args[1] != "gen" {
+			return errors.New("usage: rokh secret gen")
+		}
+		fmt.Fprintln(stdout, config.NewSecret())
+		return nil
 	case "user":
 		if len(args) < 2 || args[1] != "create" {
 			return errors.New("usage: rokh user create -username NAME -display-name NAME -role ADMIN|OPERATOR")
@@ -120,6 +128,13 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if cfg.SecretGenerated {
+		logger.Warn("APP_SECRET_KEY not set: using a random key; customer tracking links stop working on restart")
+	}
+	orderSvc := orders.New(pool, orders.Config{
+		PendingTTL: cfg.OrderPendingTTL, MaxPending: cfg.OrderMaxPending, MaxPendingPerClient: cfg.OrderMaxPendingPerClient,
+		Hours: cfg.Ordering, Location: cfg.Timezone, Secret: cfg.SecretKey,
+	})
 	queries := store.New(pool)
 	sessions := auth.NewSessions(auth.SessionConfig{IdleTimeout: cfg.SessionIdle, MaxAge: cfg.SessionMaxAge})
 	apiHandler := api.New(api.Deps{
@@ -136,6 +151,10 @@ func serve(ctx context.Context) error {
 		Images:         images,
 		Ordering:       cfg.Ordering,
 		Location:       cfg.Timezone,
+		Orders:         orderSvc,
+		OrderPerIP:     ratelimit.New(30, 10*time.Minute),
+		OrderPerClient: ratelimit.New(6, 10*time.Minute),
+		TrackPerIP:     ratelimit.New(240, time.Minute),
 	})
 	handler := httpx.NewRouter(httpx.Deps{
 		Logger:     logger,
@@ -145,6 +164,7 @@ func serve(ctx context.Context) error {
 		Media:      images.MediaHandler(),
 	})
 	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
+	go expireOrders(ctx, orderSvc, logger)
 	srv := httpx.NewServer(cfg.HTTPAddr, handler, logger)
 
 	errCh := make(chan error, 1)
@@ -339,4 +359,24 @@ func readPassword(stdin io.Reader) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// expireOrders cancels PENDING orders past their acceptance deadline every 30 s
+// (docs/ARCHITECTURE.md §2.5).
+func expireOrders(ctx context.Context, svc *orders.Service, logger *slog.Logger) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		n, err := svc.ExpireDue(ctx)
+		if err != nil && ctx.Err() == nil {
+			logger.Warn("order expiry failed", "err", err)
+		} else if n > 0 {
+			logger.Info("pending orders expired", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

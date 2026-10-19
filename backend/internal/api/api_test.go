@@ -26,6 +26,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/database"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/migrate"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/testdb"
@@ -45,6 +46,7 @@ type env struct {
 	api    *api.API
 	users  *users.Service
 	images *catalog.ImageStore
+	orders *orders.Service
 }
 
 func newEnv(t *testing.T) *env {
@@ -74,6 +76,13 @@ func newEnv(t *testing.T) *env {
 	hours, _ := config.ParseOrderingHours("00:00-24:00")
 	tehran, _ := time.LoadLocation("Asia/Tehran")
 
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(i * 7)
+	}
+	orderSvc := orders.New(pool, orders.Config{PendingTTL: 20 * time.Minute, MaxPending: 40, MaxPendingPerClient: 15,
+		Hours: hours, Location: tehran, Secret: secret})
+
 	q := store.New(pool)
 	a := api.New(api.Deps{
 		Pool:   pool,
@@ -83,16 +92,20 @@ func newEnv(t *testing.T) *env {
 			Queries:  q, AllowedOrigin: origin, Logger: quiet,
 			Cookie: auth.CookieConfig{Secure: false, MaxAge: 7 * 24 * time.Hour},
 		},
-		LoginPerIP:   ratelimit.New(1000, time.Minute),
-		LoginPerUser: ratelimit.New(5, 15*time.Minute),
-		Images:       images,
-		Ordering:     hours,
-		Location:     tehran,
+		LoginPerIP:     ratelimit.New(1000, time.Minute),
+		LoginPerUser:   ratelimit.New(5, 15*time.Minute),
+		Images:         images,
+		Ordering:       hours,
+		Location:       tehran,
+		Orders:         orderSvc,
+		OrderPerIP:     ratelimit.New(1000, time.Minute),
+		OrderPerClient: ratelimit.New(6, 10*time.Minute),
+		TrackPerIP:     ratelimit.New(1000, time.Minute),
 	})
 	srv := httptest.NewServer(httpx.NewRouter(httpx.Deps{Logger: quiet, DB: pool, API: a.Handler(), Media: images.MediaHandler()}))
 	t.Cleanup(srv.Close)
 
-	e := &env{t: t, ctx: ctx, srv: srv, pool: pool, api: a, users: &users.Service{Pool: pool}, images: images}
+	e := &env{t: t, ctx: ctx, srv: srv, pool: pool, api: a, users: &users.Service{Pool: pool}, images: images, orders: orderSvc}
 	e.createUser("admin", "ADMIN", adminPassword)
 	return e
 }
