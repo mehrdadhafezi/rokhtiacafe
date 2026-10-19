@@ -77,14 +77,15 @@ function ProductCard({ item, ordering }: { item: MenuItem; ordering: Ordering })
       <div className="flex min-w-0 flex-1 flex-col">
         <h3 className="font-bold leading-snug">{item.name}</h3>
         {item.description && <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{item.description}</p>}
-        <div className="mt-auto flex items-end justify-between gap-2 pt-2">
-          <p className="text-base font-extrabold text-primary tabular-nums">
+        <div className="mt-auto flex flex-wrap items-end justify-between gap-2 pt-2">
+          <p className="whitespace-nowrap text-base font-extrabold text-primary tabular-nums">
             {formatTomanNumber(item.price_rial)} <span className="text-xs font-medium text-muted-foreground">تومان</span>
           </p>
           {soldOut ? (
             <span className="rounded-full bg-muted px-3 py-1 text-sm font-medium text-muted-foreground">تمام شد</span>
           ) : qty > 0 ? (
             <QuantityStepper
+              className="ms-auto"
               quantity={qty}
               name={item.name}
               onIncrement={() => dispatch({ type: 'increment', productId: item.id })}
@@ -118,7 +119,7 @@ function CategoryNav({ categories, active, onSelect }: { categories: MenuCategor
               onClick={() => onSelect(c.id)}
               aria-current={active === c.id ? 'true' : undefined}
               className={cn(
-                'h-10 rounded-full border px-4 text-sm font-medium transition focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                'h-11 shrink-0 whitespace-nowrap rounded-full border px-4 text-sm font-medium transition focus-visible:ring-[3px] focus-visible:ring-ring/50',
                 active === c.id ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-surface hover:bg-muted',
               )}
             >
@@ -158,13 +159,13 @@ function CartBar() {
     <div className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-lg px-4 pb-[max(1rem,env(safe-area-inset-bottom))] animate-in fade-in slide-in-from-bottom-4">
       <Link
         to="/menu/cart"
-        className="flex h-14 items-center justify-between rounded-2xl bg-primary px-5 text-primary-foreground shadow-lg shadow-primary/30 transition hover:bg-primary/95 focus-visible:ring-[3px] focus-visible:ring-ring/50 active:scale-[0.99]"
+        className="flex h-14 items-center justify-between gap-3 rounded-2xl bg-primary px-5 text-primary-foreground shadow-lg shadow-primary/30 transition hover:bg-primary/95 focus-visible:ring-[3px] focus-visible:ring-ring/50 active:scale-[0.99]"
       >
-        <span className="flex items-center gap-2 font-bold">
+        <span className="flex items-center gap-2 whitespace-nowrap font-bold">
           <span className="grid min-w-7 place-items-center rounded-full bg-white/20 px-2 py-0.5 text-sm tabular-nums">{faDigits(count)}</span>
-          مشاهده سبد و ثبت سفارش
+          مشاهده سبد
         </span>
-        <span className="font-extrabold tabular-nums">{formatToman(cartTotalRial(cart))}</span>
+        <span className="whitespace-nowrap font-extrabold tabular-nums">{formatToman(cartTotalRial(cart))}</span>
       </Link>
     </div>
   )
@@ -181,19 +182,30 @@ export function MenuPage() {
   const sections = useRef(new Map<number, HTMLElement>())
   const categories = useMemo(() => data?.categories ?? [], [data])
 
-  // Highlight the category whose section is near the top of the screen.
+  // Highlight the category whose section is near the top of the screen. The last sections can
+  // never reach the top, so at the bottom of the page the last category wins.
   useEffect(() => {
     if (categories.length === 0) return
+    const lastId = categories[categories.length - 1]!.id
+    const atBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4
     const observer = new IntersectionObserver(
       (entries) => {
+        if (atBottom()) return setActive(lastId)
         const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
         const id = Number(visible[0]?.target.getAttribute('data-category'))
         if (id) setActive(id)
       },
       { rootMargin: '-120px 0px -60% 0px' },
     )
+    const onScroll = () => {
+      if (atBottom()) setActive(lastId)
+    }
     sections.current.forEach((el) => observer.observe(el))
-    return () => observer.disconnect()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('scroll', onScroll)
+    }
   }, [categories])
 
   const jump = (id: number) => {

@@ -149,7 +149,7 @@ export function CartPage() {
               </div>
               <div className="mt-2 flex items-center justify-between">
                 {gone ? (
-                  <Button variant="outline" size="sm" onClick={() => dispatch({ type: 'remove', productId: l.productId })} aria-label={`حذف ${l.name} از سبد`}>
+                  <Button variant="outline" onClick={() => dispatch({ type: 'remove', productId: l.productId })} aria-label={`حذف ${l.name} از سبد`}>
                     <TrashIcon /> حذف از سبد
                   </Button>
                 ) : (
@@ -177,7 +177,7 @@ export function CartPage() {
       {pendingPrices.length > 0 && dialogDismissed && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-lg bg-warning/10 px-4 py-3 text-sm text-warning">
           <span>قیمت برخی اقلام تغییر کرده است.</span>
-          <Button variant="outline" size="sm" onClick={() => setDialogDismissed(false)}>
+          <Button variant="outline" onClick={() => setDialogDismissed(false)}>
             بررسی قیمت‌ها
           </Button>
         </div>
@@ -188,7 +188,6 @@ export function CartPage() {
           <span>برخی اقلام موجود نیستند. برای ادامه آن‌ها را حذف کنید.</span>
           <Button
             variant="outline"
-            size="sm"
             onClick={() => {
               dispatch({ type: 'removeMany', productIds: [...unavailable] })
               setServerUnavailable(new Set())

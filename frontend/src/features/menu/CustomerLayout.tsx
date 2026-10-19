@@ -18,7 +18,7 @@ function HeaderCart() {
     >
       <BagIcon width={24} height={24} />
       {count > 0 && (
-        <span className="absolute -top-0.5 -end-0.5 grid min-w-5 place-items-center rounded-full bg-accent px-1 text-xs font-bold text-white tabular-nums">
+        <span className="absolute -top-0.5 -end-0.5 grid min-w-5 place-items-center rounded-full bg-primary px-1 text-xs font-bold text-primary-foreground ring-2 ring-background tabular-nums">
           {faDigits(count)}
         </span>
       )}

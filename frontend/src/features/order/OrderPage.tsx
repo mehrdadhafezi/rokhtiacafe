@@ -127,9 +127,11 @@ export function OrderPage() {
       )}
 
       {order.status === 'PENDING' && !order.expired && (
-        <p className="flex items-center gap-2 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">
+        <p className="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">
           <ClockIcon width={18} height={18} />
-          اگر سفارش تا ساعت <b className="tabular-nums">{formatTime(order.expires_at)}</b> تأیید نشود، خودکار لغو می‌شود.
+          <span>
+            اگر سفارش تا ساعت <b className="tabular-nums">{formatTime(order.expires_at)}</b> تأیید نشود، خودکار لغو می‌شود.
+          </span>
         </p>
       )}
       {reason && <p className="rounded-lg bg-muted px-3 py-2 text-sm">{reason}</p>}
