@@ -26,12 +26,51 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Timezone.String() != "Asia/Tehran" {
 		t.Errorf("timezone = %s", c.Timezone)
 	}
+	if c.AppOrigin != "http://localhost:5173" || c.CookieSecure || c.SessionIdle != 12*time.Hour || c.SessionMaxAge != 168*time.Hour {
+		t.Errorf("unexpected auth defaults: origin=%s secure=%v idle=%v max=%v", c.AppOrigin, c.CookieSecure, c.SessionIdle, c.SessionMaxAge)
+	}
+}
+
+func TestProductionRequiresSecureCookies(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_BASE_URL", "http://rokh.tiacafe.ir")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Fatalf("expected https/secure error, got %v", err)
+	}
+	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir/menu")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.CookieSecure || c.AppOrigin != "https://rokh.tiacafe.ir" {
+		t.Errorf("secure=%v origin=%s", c.CookieSecure, c.AppOrigin)
+	}
+}
+
+func TestTrustedProxies(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1, 10.0.0.0/8 ,::1")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.TrustedProxies) != 3 || c.TrustedProxies[0].String() != "127.0.0.1/32" || c.TrustedProxies[1].String() != "10.0.0.0/8" {
+		t.Errorf("proxies = %v", c.TrustedProxies)
+	}
+	t.Setenv("TRUSTED_PROXIES", "not-an-ip")
+	if _, err := Load(); err == nil {
+		t.Error("expected error for invalid proxy")
+	}
 }
 
 func TestLoadProductionUsesJSONLogs(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir")
 
 	c, err := Load()
 	if err != nil {
@@ -99,7 +138,8 @@ func TestLoadDotEnvRejectsMalformedLine(t *testing.T) {
 // clearEnv unsets every variable Load reads; t.Setenv restores the originals afterwards.
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"APP_ENV", "HTTP_ADDR", "DATABASE_URL", "LOG_LEVEL", "LOG_FORMAT", "APP_TIMEZONE", "SHUTDOWN_TIMEOUT"} {
+	for _, k := range []string{"APP_ENV", "HTTP_ADDR", "DATABASE_URL", "LOG_LEVEL", "LOG_FORMAT", "APP_TIMEZONE", "SHUTDOWN_TIMEOUT",
+		"APP_BASE_URL", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_AGE", "TRUSTED_PROXIES"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}

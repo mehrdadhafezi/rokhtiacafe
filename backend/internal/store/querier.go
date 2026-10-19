@@ -6,9 +6,13 @@ package store
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	// Serializes a class of operations for the rest of the transaction (docs/DATABASE.md §3.1).
+	AdvisoryXactLock(ctx context.Context, key int64) error
 	// INV-16 (only meaningful once users exist).
 	CheckActiveAdminExists(ctx context.Context) (CheckActiveAdminExistsRow, error)
 	// INV-4: on_hand and inventory value equal the sums of the movement ledger.
@@ -26,8 +30,27 @@ type Querier interface {
 	// INV-3: reserved = open (PENDING/PREPARING/READY) tracked order quantities.
 	CheckReservedMatchesOpenOrders(ctx context.Context) ([]CheckReservedMatchesOpenOrdersRow, error)
 	CheckTrackedProductsHaveBalance(ctx context.Context) ([]int64, error)
+	CountActiveAdmins(ctx context.Context) (int64, error)
+	CreateSession(ctx context.Context, arg CreateSessionParams) error
+	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteExpiredSessions(ctx context.Context, idleCutoff pgtype.Timestamptz) (int64, error)
+	DeleteSession(ctx context.Context, tokenHash []byte) error
+	DeleteUserSessions(ctx context.Context, userID int64) error
+	DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSessionsExceptParams) error
+	// Every request re-reads the user, so deactivation and role changes apply immediately.
+	GetSessionWithUser(ctx context.Context, tokenHash []byte) (GetSessionWithUserRow, error)
+	GetUserByID(ctx context.Context, id int64) (User, error)
+	GetUserByIDForUpdate(ctx context.Context, id int64) (User, error)
+	GetUserByUsername(ctx context.Context, username string) (User, error)
+	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
+	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
+	ListUsers(ctx context.Context) ([]User, error)
 	// Readiness probe: proves the runtime role can run a query.
 	Ping(ctx context.Context) (int32, error)
+	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	TouchSession(ctx context.Context, tokenHash []byte) error
+	TouchUserLogin(ctx context.Context, id int64) error
+	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)

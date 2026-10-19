@@ -2,24 +2,34 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // Asia/Tehran must resolve on Windows and minimal servers.
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/api"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/check"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/database"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/migrate"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -32,6 +42,8 @@ commands:
   migrate up       apply pending migrations (uses MIGRATION_DATABASE_URL)
   migrate status   list migrations and whether they are applied
   check            verify app-enforced data invariants (read-only, uses DATABASE_URL)
+  user create      create a staff account; password is read from stdin
+                   flags: -username NAME -display-name NAME -role ADMIN|OPERATOR
   version          print the build version
 `
 
@@ -66,6 +78,11 @@ func run(args []string, stdout io.Writer) error {
 		return runMigrate(ctx, args[1], stdout)
 	case "check":
 		return runCheck(ctx, stdout)
+	case "user":
+		if len(args) < 2 || args[1] != "create" {
+			return errors.New("usage: rokh user create -username NAME -display-name NAME -role ADMIN|OPERATOR")
+		}
+		return runUserCreate(ctx, args[2:], os.Stdin, stdout)
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil
@@ -97,11 +114,26 @@ func serve(ctx context.Context) error {
 	}
 	defer pool.Close()
 
+	queries := store.New(pool)
+	sessions := auth.NewSessions(auth.SessionConfig{IdleTimeout: cfg.SessionIdle, MaxAge: cfg.SessionMaxAge})
+	apiHandler := api.New(api.Deps{
+		Pool:   pool,
+		Logger: logger,
+		Auth: &auth.Middleware{
+			Sessions: sessions, Queries: queries, AllowedOrigin: cfg.AppOrigin, Logger: logger,
+			Cookie: auth.CookieConfig{Secure: cfg.CookieSecure, MaxAge: cfg.SessionMaxAge},
+		},
+		TrustedProxies: cfg.TrustedProxies,
+		LoginPerIP:     ratelimit.New(20, 15*time.Minute),
+		LoginPerUser:   ratelimit.New(5, 15*time.Minute),
+	})
 	handler := httpx.NewRouter(httpx.Deps{
 		Logger:     logger,
-		DB:         readiness{q: store.New(pool)},
+		DB:         readiness{q: queries},
 		Production: cfg.IsProduction(),
+		API:        apiHandler.Handler(),
 	})
+	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
 	srv := httpx.NewServer(cfg.HTTPAddr, handler, logger)
 
 	errCh := make(chan error, 1)
@@ -219,4 +251,68 @@ func runCheck(ctx context.Context, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "%d violation(s)\n", len(violations))
 	return errCheckFailed
+}
+
+// cleanupSessions deletes expired and idle sessions hourly (docs/ARCHITECTURE.md §2.5).
+func cleanupSessions(ctx context.Context, q *store.Queries, idle time.Duration, logger *slog.Logger) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		n, err := q.DeleteExpiredSessions(ctx, pgtype.Timestamptz{Time: time.Now().Add(-idle), Valid: true})
+		if err != nil && ctx.Err() == nil {
+			logger.Warn("session cleanup failed", "err", err)
+		} else if n > 0 {
+			logger.Info("expired sessions removed", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// runUserCreate creates a staff account. The password comes from stdin (never args or env),
+// so it does not end up in shell history or process listings.
+func runUserCreate(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := flag.NewFlagSet("user create", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	username := fs.String("username", "", "login name (a-z, 0-9, _ and ., 3-32 chars)")
+	displayName := fs.String("display-name", "", "name shown in the app")
+	role := fs.String("role", "ADMIN", "ADMIN or OPERATOR")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		return errors.New("DATABASE_URL is required")
+	}
+
+	fmt.Fprint(stdout, "Password (min 10 characters): ")
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read password: %w", err)
+	}
+	fmt.Fprintln(stdout)
+	password := strings.TrimRight(line, "\r\n")
+
+	pool, err := database.Open(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	svc := &users.Service{Pool: pool}
+	u, err := svc.Create(ctx, audit.System, users.CreateInput{
+		Username: *username, DisplayName: *displayName, Role: strings.ToUpper(*role), Password: password,
+	})
+	var bad users.ValidationError
+	if errors.As(err, &bad) {
+		return fmt.Errorf("invalid input: %v", map[string]string(bad))
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "created %s user %q (id %d)\n", u.Role, u.Username, u.ID)
+	return nil
 }

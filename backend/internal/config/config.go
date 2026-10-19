@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +29,13 @@ type Config struct {
 	LogFormat       string // "text" or "json"
 	Timezone        *time.Location
 	ShutdownTimeout time.Duration
+
+	// AppOrigin is scheme://host[:port] of APP_BASE_URL; unsafe requests must come from it.
+	AppOrigin      string
+	CookieSecure   bool
+	SessionIdle    time.Duration
+	SessionMaxAge  time.Duration
+	TrustedProxies []netip.Prefix
 }
 
 // IsProduction reports whether the app runs in production mode.
@@ -77,6 +87,48 @@ func Load() (Config, error) {
 	c.ShutdownTimeout, err = time.ParseDuration(getenv("SHUTDOWN_TIMEOUT", "15s"))
 	if err != nil || c.ShutdownTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive duration"))
+	}
+
+	base, err := url.Parse(getenv("APP_BASE_URL", "http://localhost:5173"))
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		errs = append(errs, errors.New("APP_BASE_URL must be an absolute http(s) URL"))
+	} else {
+		c.AppOrigin = base.Scheme + "://" + base.Host
+	}
+
+	c.CookieSecure, err = strconv.ParseBool(getenv("COOKIE_SECURE", strconv.FormatBool(c.IsProduction())))
+	if err != nil {
+		errs = append(errs, errors.New("COOKIE_SECURE must be true or false"))
+	}
+	if c.IsProduction() && (!c.CookieSecure || !strings.HasPrefix(c.AppOrigin, "https://")) {
+		errs = append(errs, errors.New("production requires COOKIE_SECURE=true and an https APP_BASE_URL"))
+	}
+
+	c.SessionIdle, err = time.ParseDuration(getenv("SESSION_IDLE_TIMEOUT", "12h"))
+	if err != nil || c.SessionIdle <= 0 {
+		errs = append(errs, errors.New("SESSION_IDLE_TIMEOUT must be a positive duration"))
+	}
+	c.SessionMaxAge, err = time.ParseDuration(getenv("SESSION_MAX_AGE", "168h"))
+	if err != nil || c.SessionMaxAge < c.SessionIdle {
+		errs = append(errs, errors.New("SESSION_MAX_AGE must be a duration >= SESSION_IDLE_TIMEOUT"))
+	}
+
+	for _, part := range strings.Split(os.Getenv("TRUSTED_PROXIES"), ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			if a, err := netip.ParseAddr(part); err == nil {
+				part = netip.PrefixFrom(a, a.BitLen()).String()
+			}
+		}
+		p, err := netip.ParsePrefix(part)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("TRUSTED_PROXIES: invalid entry %q", part))
+			continue
+		}
+		c.TrustedProxies = append(c.TrustedProxies, p.Masked())
 	}
 
 	return c, errors.Join(errs...)

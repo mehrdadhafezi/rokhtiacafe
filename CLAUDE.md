@@ -69,5 +69,8 @@ PostgreSQL: dev/CI 17, minimum 16.
 - sqlc runs from the pinned Docker image `sqlc/sqlc:1.29.0`; commit generated `internal/store`.
 - New migrations: `backend/db/migrations/NNNNN_name.sql` with `-- +goose Up` (forward-only).
   They run as `rokh_owner`; grant DELETE explicitly only where DATABASE.md allows it.
+- First admin: `echo <password> | rokh user create -username NAME -display-name NAME -role ADMIN` (password via stdin only).
+- Admin routes must be registered through `guarded.handle(method, pattern, action, h)` in `internal/api` so the
+  route-coverage test sees their policy action; never call `auth.Can` ad hoc in handlers.
 - `rokh check` verifies the app-enforced invariants (INV-3/4/7b/8/11/16); run it after data changes in tests.
 - Trigger SQLSTATEs: `RK001` delete forbidden, `RK002` immutable/append-only, `RK003` illegal order transition.
