@@ -44,6 +44,8 @@ type Querier interface {
 	CountPendingOrders(ctx context.Context) (int64, error)
 	CountPendingOrdersForClient(ctx context.Context, clientKey []byte) (int64, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
+	// Operational expenses (docs/DATABASE.md §2.11). Voided rows stay and are excluded from reports.
+	CreateExpense(ctx context.Context, arg CreateExpenseParams) (Expense, error)
 	CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error)
 	CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) (OrderItem, error)
 	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
@@ -54,6 +56,9 @@ type Querier interface {
 	// Every order mutation starts with GetOrderForUpdate; status UPDATEs keep a WHERE guard on the
 	// expected status as defence in depth.
 	DBNow(ctx context.Context) (pgtype.Timestamptz, error)
+	DashboardLowStock(ctx context.Context) ([]DashboardLowStockRow, error)
+	DashboardOpenCounts(ctx context.Context) ([]DashboardOpenCountsRow, error)
+	DashboardOrdersSince(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, idleCutoff pgtype.Timestamptz) (int64, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 	DeleteUserSessions(ctx context.Context, userID int64) error
@@ -62,6 +67,8 @@ type Querier interface {
 	EnsureInventoryBalance(ctx context.Context, productID int64) error
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetCategoryForUpdate(ctx context.Context, id int64) (Category, error)
+	GetExpenseByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Expense, error)
+	GetExpenseForUpdate(ctx context.Context, id int64) (Expense, error)
 	GetInventoryBalanceForUpdate(ctx context.Context, productID int64) (InventoryBalance, error)
 	GetMovementByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (InventoryMovement, error)
 	GetOrder(ctx context.Context, id int64) (Order, error)
@@ -100,6 +107,7 @@ type Querier interface {
 	ListAdminPushSubscriptions(ctx context.Context) ([]int64, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
 	ListCategories(ctx context.Context) ([]Category, error)
+	ListExpenses(ctx context.Context, arg ListExpensesParams) ([]Expense, error)
 	// Tracked products with their balance; products without a balance row show zeros.
 	ListInventory(ctx context.Context) ([]ListInventoryRow, error)
 	ListMovements(ctx context.Context, arg ListMovementsParams) ([]InventoryMovement, error)
@@ -109,6 +117,7 @@ type Querier interface {
 	ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
 	ListPurchases(ctx context.Context, arg ListPurchasesParams) ([]PurchaseEntry, error)
+	ListReceivables(ctx context.Context) ([]ListReceivablesRow, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	MarkOrderReady(ctx context.Context, id int64) (Order, error)
 	// Called only under LOCK_ORDER_CREATE, so the number is unique and gap-free per business date.
@@ -120,6 +129,24 @@ type Querier interface {
 	// Active categories and products only. Exact stock is never exposed, only availability.
 	PublicMenu(ctx context.Context) ([]PublicMenuRow, error)
 	ReleaseReservation(ctx context.Context, arg ReleaseReservationParams) (InventoryBalance, error)
+	// Financial reports (docs/DATABASE.md §7, docs/WORKFLOWS.md §3.1). Every metric is bucketed by the
+	// business date of its own timestamp in the business timezone (@tz). Ranges are half-open
+	// [@from_ts, @to_ts) for timestamps and inclusive [@from_date, @to_date] for date columns.
+	// Gross sales, order count and COGS of orders completed in the range (revenue recognised at completion).
+	ReportCompletedOrdersByDay(ctx context.Context, arg ReportCompletedOrdersByDayParams) ([]ReportCompletedOrdersByDayRow, error)
+	// Estimated cost of wasted made-to-order items (information only, never in the operating result).
+	ReportEstimatedWasteByDay(ctx context.Context, arg ReportEstimatedWasteByDayParams) ([]ReportEstimatedWasteByDayRow, error)
+	ReportExpensesByDay(ctx context.Context, arg ReportExpensesByDayParams) ([]ReportExpensesByDayRow, error)
+	// Value moved by manual adjustments and order waste (losses are negative deltas).
+	ReportInventoryValueByDay(ctx context.Context, arg ReportInventoryValueByDayParams) ([]ReportInventoryValueByDayRow, error)
+	// Non-void payment and refund rows by day, kind, method and the order's current status.
+	ReportPaymentsByDay(ctx context.Context, arg ReportPaymentsByDayParams) ([]ReportPaymentsByDayRow, error)
+	// Per-product sales of orders completed in the range. Revenue here is line revenue before
+	// order-level refunds; actual COGS for TRACKED lines, estimated cost for UNTRACKED lines.
+	ReportProducts(ctx context.Context, arg ReportProductsParams) ([]ReportProductsRow, error)
+	ReportPurchasesByDay(ctx context.Context, arg ReportPurchasesByDayParams) ([]ReportPurchasesByDayRow, error)
+	// Point in time (now): completed, not refunded, not fully paid.
+	ReportReceivablesTotal(ctx context.Context) (ReportReceivablesTotalRow, error)
 	// Atomic reservation: succeeds only while enough is available (no oversell).
 	ReserveStock(ctx context.Context, arg ReserveStockParams) (InventoryBalance, error)
 	SetLowStockAlerted(ctx context.Context, productID int64) (pgtype.Timestamptz, error)
@@ -135,6 +162,7 @@ type Querier interface {
 	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
 	UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
+	VoidExpense(ctx context.Context, arg VoidExpenseParams) (Expense, error)
 	VoidPayment(ctx context.Context, arg VoidPaymentParams) (Payment, error)
 	VoidPurchase(ctx context.Context, arg VoidPurchaseParams) (PurchaseEntry, error)
 }

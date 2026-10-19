@@ -184,29 +184,38 @@ current status returns `200` with no side effects (safe double-tap). Any other m
 | POST | `/admin/expenses/{id}/void` | A | `{ reason }` |
 
 ### 5.7 Reports (ADMIN)
-`GET /admin/reports/summary?from=2026-10-01&to=2026-10-31` (max 366 days)
+`GET /admin/reports/summary?from=2026-10-01&to=2026-10-31` (business dates in Asia/Tehran, inclusive, max 366 days)
 ```json
-{ "from": "2026-10-01", "to": "2026-10-31",
+{ "from": "2026-10-01", "to": "2026-10-31", "timezone": "Asia/Tehran",
   "totals": { "gross_sales_rial": 0, "sales_refunds_rial": 0, "revenue_rial": 0, "orders": 0,
               "average_order_value_rial": 0, "cogs_rial": 0, "gross_profit_rial": 0,
               "inventory_losses_rial": 0, "inventory_gains_rial": 0,
               "expenses_rial": 0, "operating_result_rial": 0,
               "purchases_rial": 0, "prepayment_refunds_rial": 0,
-              "collected": { "CASH": 0, "CARD_TERMINAL": 0 } },
-  "receivables": { "orders": 0, "amount_rial": 0 },            // point in time (now), F9
-  "estimates": { "estimated_waste_rial": 0 },                 // informational, F7/F8 — never in operating result
-  "daily": [ { "date": "2026-10-01", "revenue_rial": 0, "orders": 0, "cogs_rial": 0,
-               "gross_profit_rial": 0, "expenses_rial": 0 } ],
-  "expenses_by_category": { "INGREDIENTS": 0 } }
+              "payments_received": { "CASH": 0, "CARD_TERMINAL": 0 },
+              "refunds_recorded":  { "CASH": 0, "CARD_TERMINAL": 0 },
+              "collected":         { "CASH": 0, "CARD_TERMINAL": 0 },   // received − refunds recorded
+              "estimated_waste_rial": 0 },                              // informational (F7/F8), never in the operating result
+  "daily": [ { "date": "2026-10-01", "…": "same fields as totals" } ],  // every date in the range, empty days included
+  "expenses_by_category": { "INGREDIENTS": 0 },
+  "receivables": { "orders": 0, "amount_rial": 0 } }                    // point in time (now), F9
 ```
+A REFUND row **records** that money is owed back to the customer; the system does not move money.
+Handing cash back or reversing the card-terminal transaction is a staff action, which is why refund
+and cancel responses list the amounts per method and the report separates `refunds_recorded` from
+`payments_received`.
+
 Monthly (Jalali) views are produced by the client by requesting the Jalali month's
 Gregorian date range and summing `daily`.
 
-`GET /admin/reports/products?from&to` → `[{ product_id, name, inventory_mode, quantity, revenue_rial, cogs_rial, gross_profit_rial, estimated_cost_rial|null, estimated_margin_rial|null }]`.
+`GET /admin/reports/products?from&to` → `{ from, to, items: [{ product_id, name, inventory_mode, quantity, revenue_rial, cogs_rial, gross_profit_rial, estimated_revenue_rial|null, estimated_cost_rial|null, estimated_margin_rial|null, lines_without_estimate }] }`.
+Estimated figures cover only lines sold while an estimate was set (`estimated_margin_rial = estimated_revenue_rial − estimated_cost_rial`);
+`lines_without_estimate` counts the rest. Report queries read one database snapshot.
+Revenue here is line revenue of orders completed in the range, before order-level refunds.
 For UNTRACKED products `cogs_rial` is 0 and the estimated fields carry the management estimate (F8);
 the UI labels them «تخمینی» and never adds them to the summary.
 
-`GET /admin/reports/receivables` → completed orders with `total_rial − paid_rial > 0` and no refund.
+`GET /admin/reports/receivables` → `{ items: [{ order_id, order_number, business_date, completed_at, total_rial, paid_rial, outstanding_rial }], total_outstanding_rial }` — completed orders with `total_rial − paid_rial > 0` and no refund, oldest first.
 
 Definitions: [DATABASE.md §7](DATABASE.md#7-reporting-queries-definitions).
 
