@@ -78,6 +78,8 @@ export default defineConfig({
         // API calls are network-only: no stale prices or order states.
         runtimeCaching: [{ urlPattern: ({ url }) => url.pathname.startsWith('/api/'), handler: 'NetworkOnly' }],
         cleanupOutdatedCaches: true,
+        // Web Push handlers (T12): push → notification, click → open the staff page.
+        importScripts: ['/admin/push-sw.js'],
       },
     }),
   ],

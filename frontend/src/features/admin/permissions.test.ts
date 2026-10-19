@@ -18,6 +18,7 @@ describe('role permissions (mirror of internal/auth/policy.go)', () => {
       'payments.void',
       'ordering.toggle',
       'dashboard.revenue',
+      'push.manage',
     ] as const) {
       expect(can('OPERATOR', a)).toBe(false)
     }

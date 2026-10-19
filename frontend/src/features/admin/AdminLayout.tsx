@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 
 import { AuthProvider } from './auth'
 import { useAuth } from './hooks'
+import { usePushSync } from './push/usePushSync'
 import { roleLabel } from './labels'
 import type { Action } from './permissions'
 import { ToastProvider } from './ui'
@@ -23,6 +24,7 @@ const nav: { to: string; label: string; action: Action; end?: boolean }[] = [
 
 function Shell() {
   const { user, can, logout } = useAuth()
+  usePushSync()
   const items = nav.filter((n) => can(n.action))
 
   return (

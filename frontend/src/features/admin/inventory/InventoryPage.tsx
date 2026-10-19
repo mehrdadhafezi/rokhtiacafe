@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import { Dialog } from '@/components/Dialog'
 import { EmptyState, ErrorState, LoadingState } from '@/components/states'
@@ -185,11 +185,15 @@ export function InventoryPage() {
   const q = useQuery({ queryKey: inventoryKey, queryFn: ({ signal }) => inventoryApi.list(signal), refetchInterval: 30_000 })
   const [adjusting, setAdjusting] = useState<StockRow | null>(null)
   const [viewing, setViewing] = useState<StockRow | null>(null)
+  // Low-stock notifications open /admin/inventory?filter=low.
+  const [params] = useSearchParams()
+  const onlyLow = params.get('filter') === 'low'
 
   if (q.isPending) return <LoadingState />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />
-  const rows = q.data.items
-  const totalValue = rows.reduce((s, r) => s + (r.inventory_value_rial ?? 0), 0)
+  const all = q.data.items
+  const rows = onlyLow ? all.filter((r) => r.low || r.available === 0) : all
+  const totalValue = all.reduce((s, r) => s + (r.inventory_value_rial ?? 0), 0)
 
   return (
     <div className="space-y-4">
@@ -210,7 +214,17 @@ export function InventoryPage() {
           <p className="mt-1 text-2xl font-black text-primary tabular-nums">{formatToman(totalValue)}</p>
         </Card>
       )}
-      {rows.length === 0 ? (
+      {onlyLow && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-warning/10 px-4 py-2 text-sm text-warning">
+          <span>فقط کالاهای کم یا تمام‌شده نمایش داده می‌شوند.</span>
+          <Link to="/inventory" className="inline-flex h-11 items-center font-medium underline-offset-4 hover:underline">
+            نمایش همه
+          </Link>
+        </div>
+      )}
+      {onlyLow && rows.length === 0 && all.length > 0 ? (
+        <EmptyState title="الان کالای کم‌موجودی نیست" description="موجودی همهٔ کالاها بالاتر از حد هشدار است." />
+      ) : rows.length === 0 ? (
         <EmptyState title="کالای شمارشی تعریف نشده است" description="در «منو و محصولات» نوع موجودی را «با کنترل موجودی» بگذارید." />
       ) : (
         <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

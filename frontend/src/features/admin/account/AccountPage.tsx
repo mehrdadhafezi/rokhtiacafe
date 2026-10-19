@@ -7,13 +7,14 @@ import { faDigits } from '@/lib/digits'
 
 import { authApi } from '../api'
 import { useAuth, useToast } from '../hooks'
+import { PushCard } from '../push/PushCard'
 import { roleLabel } from '../labels'
 import { Card, Field, FormError, PageHeader, inputClass } from '../ui'
 
 const MIN_PASSWORD = 10
 
 export function AccountPage() {
-  const { user, logout } = useAuth()
+  const { user, logout, can } = useAuth()
   const toast = useToast()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -46,6 +47,7 @@ export function AccountPage() {
           خروج از حساب
         </Button>
       </Card>
+      {can('push.manage') && <PushCard />}
       <Card>
         <h2 className="mb-3 font-bold">تغییر رمز عبور</h2>
         <form onSubmit={submit} className="space-y-4" noValidate>

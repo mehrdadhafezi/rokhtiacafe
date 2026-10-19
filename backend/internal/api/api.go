@@ -18,6 +18,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/payments"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/push"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/reports"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
@@ -40,6 +41,8 @@ type Deps struct {
 	OrderPerIP     *ratelimit.Limiter // POST /public/orders per IP
 	OrderPerClient *ratelimit.Limiter // POST /public/orders per X-Client-Id
 	TrackPerIP     *ratelimit.Limiter // tracking + customer cancel per IP
+	Push           *push.Service      // nil when Web Push is not configured
+	VAPIDPublicKey string
 }
 
 // API is the /api/v1 handler plus the route→permission table used by the coverage test.
@@ -133,6 +136,11 @@ func New(d Deps) *API {
 		g.handle(http.MethodGet, "/purchases", auth.ActInventoryViewCost, a.listPurchases)
 		g.handle(http.MethodPost, "/purchases", auth.ActInventoryManage, a.createPurchase)
 		g.handle(http.MethodPost, "/purchases/{id}/void", auth.ActInventoryManage, a.voidPurchase)
+
+		g.handle(http.MethodGet, "/push/vapid-public-key", auth.ActPushManage, a.vapidPublicKey)
+		g.handle(http.MethodPost, "/push/subscriptions", auth.ActPushManage, a.pushSubscribe)
+		g.handle(http.MethodDelete, "/push/subscriptions", auth.ActPushManage, a.pushUnsubscribe)
+		g.handle(http.MethodPost, "/push/test", auth.ActPushManage, a.pushTest)
 	})
 
 	a.handler = r

@@ -36,6 +36,8 @@ type Querier interface {
 	// INV-3: reserved = open (PENDING/PREPARING/READY) tracked order quantities.
 	CheckReservedMatchesOpenOrders(ctx context.Context) ([]CheckReservedMatchesOpenOrdersRow, error)
 	CheckTrackedProductsHaveBalance(ctx context.Context) ([]int64, error)
+	// Short transaction: lease due events (and claims of crashed workers) to this worker.
+	ClaimNotificationEvents(ctx context.Context, arg ClaimNotificationEventsParams) ([]ClaimNotificationEventsRow, error)
 	ClearLowStockAlerted(ctx context.Context, productID int64) error
 	CompleteOrder(ctx context.Context, arg CompleteOrderParams) (Order, error)
 	// SALE / WASTE: reserved units leave physical stock at average cost.
@@ -60,11 +62,16 @@ type Querier interface {
 	DashboardOpenCounts(ctx context.Context) ([]DashboardOpenCountsRow, error)
 	DashboardOrdersSince(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, idleCutoff pgtype.Timestamptz) (int64, error)
+	DeleteOldNotificationEvents(ctx context.Context, before pgtype.Timestamptz) (int64, error)
+	DeletePushSubscription(ctx context.Context, id int64) error
 	DeleteSession(ctx context.Context, tokenHash []byte) error
+	DeleteUserPushSubscription(ctx context.Context, arg DeleteUserPushSubscriptionParams) (int64, error)
 	DeleteUserSessions(ctx context.Context, userID int64) error
 	DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSessionsExceptParams) error
 	// Every TRACKED product has a balance row (created with the product or on a mode switch).
 	EnsureInventoryBalance(ctx context.Context, productID int64) error
+	// A claim whose lease ran out after the last allowed attempt cannot be retried: fail it.
+	ExpireStaleNotificationClaims(ctx context.Context, maxAttempts int32) (int64, error)
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetCategoryForUpdate(ctx context.Context, id int64) (Category, error)
 	GetExpenseByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Expense, error)
@@ -90,6 +97,7 @@ type Querier interface {
 	GetPurchaseByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (PurchaseEntry, error)
 	GetPurchaseForUpdate(ctx context.Context, id int64) (PurchaseEntry, error)
 	GetPurchaseMovement(ctx context.Context, purchaseEntryID pgtype.Int8) (InventoryMovement, error)
+	GetPushSubscription(ctx context.Context, id int64) (PushSubscription, error)
 	// Every request re-reads the user, so deactivation and role changes apply immediately.
 	GetSessionWithUser(ctx context.Context, tokenHash []byte) (GetSessionWithUserRow, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
@@ -97,6 +105,7 @@ type Querier interface {
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	// True when stock left the product after the given movement (blocks exact purchase voids, F4).
 	HasOutflowAfter(ctx context.Context, arg HasOutflowAfterParams) (bool, error)
+	IncrementPushSubscriptionFailures(ctx context.Context, id int64) (int32, error)
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertMovement(ctx context.Context, arg InsertMovementParams) (InventoryMovement, error)
 	InsertNotificationEvent(ctx context.Context, arg InsertNotificationEventParams) error
@@ -118,8 +127,14 @@ type Querier interface {
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
 	ListPurchases(ctx context.Context, arg ListPurchasesParams) ([]PurchaseEntry, error)
 	ListReceivables(ctx context.Context) ([]ListReceivablesRow, error)
+	ListUserPushSubscriptions(ctx context.Context, userID int64) ([]int64, error)
 	ListUsers(ctx context.Context) ([]User, error)
+	// FAILED or GONE.
+	MarkNotificationFinal(ctx context.Context, arg MarkNotificationFinalParams) (int64, error)
+	MarkNotificationRetry(ctx context.Context, arg MarkNotificationRetryParams) (int64, error)
+	MarkNotificationSent(ctx context.Context, arg MarkNotificationSentParams) (int64, error)
 	MarkOrderReady(ctx context.Context, id int64) (Order, error)
+	MarkPushSubscriptionSuccess(ctx context.Context, id int64) error
 	// Called only under LOCK_ORDER_CREATE, so the number is unique and gap-free per business date.
 	NextDisplayNumber(ctx context.Context, businessDate pgtype.Date) (int32, error)
 	// One order per transaction; the lock taken here is the one held while it is cancelled (F2).
@@ -162,6 +177,9 @@ type Querier interface {
 	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
 	UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
+	// Web Push subscriptions and the leased notification outbox (docs/WORKFLOWS.md §4).
+	// One row per endpoint; re-subscribing the same browser (or another admin on it) rebinds it.
+	UpsertPushSubscription(ctx context.Context, arg UpsertPushSubscriptionParams) (PushSubscription, error)
 	VoidExpense(ctx context.Context, arg VoidExpenseParams) (Expense, error)
 	VoidPayment(ctx context.Context, arg VoidPaymentParams) (Payment, error)
 	VoidPurchase(ctx context.Context, arg VoidPurchaseParams) (PurchaseEntry, error)

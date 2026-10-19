@@ -25,3 +25,9 @@ func TestMultiline(t *testing.T) {
 		t.Errorf("Multiline = %q", got)
 	}
 }
+
+func TestPersianDigits(t *testing.T) {
+	if got := PersianDigits("کیک: 12 عدد، 0"); got != "کیک: ۱۲ عدد، ۰" {
+		t.Errorf("got %q", got)
+	}
+}
