@@ -1,0 +1,71 @@
+# --- Secrets & environment (repo is PUBLIC) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+secrets/
+credentials/
+*credentials*.json
+*.secret
+
+# --- Databases, dumps & backups ---
+# (*.sql is NOT ignored globally so schema migrations can be tracked)
+*.sql.gz
+*.dump
+*dump*.sql
+*backup*.sql
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+backups/
+dumps/
+/data/
+/deploy/data/
+
+# --- Node / frontend ---
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Go / backend ---
+/backend/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+*.tmp
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
