@@ -40,6 +40,7 @@ func TestProductionRequiresSecureCookies(t *testing.T) {
 		t.Fatalf("expected https/secure error, got %v", err)
 	}
 	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir/menu")
+	t.Setenv("APP_SECRET_KEY", NewSecret())
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -71,6 +72,7 @@ func TestLoadProductionUsesJSONLogs(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir")
+	t.Setenv("APP_SECRET_KEY", NewSecret())
 
 	c, err := Load()
 	if err != nil {
@@ -139,8 +141,42 @@ func TestLoadDotEnvRejectsMalformedLine(t *testing.T) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"APP_ENV", "HTTP_ADDR", "DATABASE_URL", "LOG_LEVEL", "LOG_FORMAT", "APP_TIMEZONE", "SHUTDOWN_TIMEOUT",
-		"APP_BASE_URL", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_AGE", "TRUSTED_PROXIES", "UPLOAD_DIR", "ORDERING_HOURS"} {
+		"APP_BASE_URL", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_AGE", "TRUSTED_PROXIES", "UPLOAD_DIR", "ORDERING_HOURS",
+		"ORDER_PENDING_TTL", "ORDER_MAX_PENDING", "ORDER_MAX_PENDING_PER_CLIENT", "APP_SECRET_KEY"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
+	}
+}
+
+func TestOrderingAndSecretConfig(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OrderPendingTTL != 20*time.Minute || c.OrderMaxPending != 40 || c.OrderMaxPendingPerClient != 15 {
+		t.Errorf("defaults: %v %d %d", c.OrderPendingTTL, c.OrderMaxPending, c.OrderMaxPendingPerClient)
+	}
+	if !c.SecretGenerated || len(c.SecretKey) != 32 {
+		t.Error("development must generate a random secret when none is set")
+	}
+
+	t.Setenv("APP_SECRET_KEY", "dG9vLXNob3J0") // "too-short"
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "32 bytes") {
+		t.Errorf("short secret: %v", err)
+	}
+	t.Setenv("APP_SECRET_KEY", NewSecret())
+	t.Setenv("ORDER_PENDING_TTL", "10s")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ORDER_PENDING_TTL") {
+		t.Errorf("short TTL: %v", err)
+	}
+
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "APP_SECRET_KEY") {
+		t.Errorf("production without secret: %v", err)
 	}
 }

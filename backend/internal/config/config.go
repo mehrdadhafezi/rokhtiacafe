@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,6 +41,13 @@ type Config struct {
 
 	UploadDir string
 	Ordering  OrderingHours
+
+	OrderPendingTTL          time.Duration
+	OrderMaxPending          int64
+	OrderMaxPendingPerClient int64
+	// SecretKey derives tracking tokens and client keys (APP_SECRET_KEY, base64, >= 32 bytes).
+	SecretKey       []byte
+	SecretGenerated bool // true when a random key was generated for development
 }
 
 // IsProduction reports whether the app runs in production mode.
@@ -140,6 +149,32 @@ func Load() (Config, error) {
 		errs = append(errs, err)
 	}
 
+	c.OrderPendingTTL, err = time.ParseDuration(getenv("ORDER_PENDING_TTL", "20m"))
+	if err != nil || c.OrderPendingTTL < time.Minute || c.OrderPendingTTL > 24*time.Hour {
+		errs = append(errs, errors.New("ORDER_PENDING_TTL must be between 1m and 24h"))
+	}
+	c.OrderMaxPending, err = strconv.ParseInt(getenv("ORDER_MAX_PENDING", "40"), 10, 64)
+	if err != nil || c.OrderMaxPending < 1 {
+		errs = append(errs, errors.New("ORDER_MAX_PENDING must be a positive integer"))
+	}
+	c.OrderMaxPendingPerClient, err = strconv.ParseInt(getenv("ORDER_MAX_PENDING_PER_CLIENT", "15"), 10, 64)
+	if err != nil || c.OrderMaxPendingPerClient < 1 {
+		errs = append(errs, errors.New("ORDER_MAX_PENDING_PER_CLIENT must be a positive integer"))
+	}
+
+	if raw := os.Getenv("APP_SECRET_KEY"); raw != "" {
+		c.SecretKey, err = DecodeSecret(raw)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	} else if c.IsProduction() {
+		errs = append(errs, errors.New("APP_SECRET_KEY is required in production (generate with: rokh secret gen)"))
+	} else {
+		c.SecretKey = make([]byte, 32)
+		_, _ = rand.Read(c.SecretKey)
+		c.SecretGenerated = true
+	}
+
 	return c, errors.Join(errs...)
 }
 
@@ -157,4 +192,25 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// DecodeSecret accepts standard or URL-safe base64, padded or not, of at least 32 bytes.
+func DecodeSecret(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(raw); err == nil {
+			if len(b) < 32 {
+				return nil, errors.New("APP_SECRET_KEY must decode to at least 32 bytes")
+			}
+			return b, nil
+		}
+	}
+	return nil, errors.New("APP_SECRET_KEY must be base64")
+}
+
+// NewSecret returns a fresh random key encoded for APP_SECRET_KEY.
+func NewSecret() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
 }

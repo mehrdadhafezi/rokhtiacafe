@@ -503,3 +503,75 @@ func (s *Service) ListMovements(ctx context.Context, productID int64, beforeID p
 func (s *Service) ListPurchases(ctx context.Context, p store.ListPurchasesParams) ([]store.PurchaseEntry, error) {
 	return store.New(s.Pool).ListPurchases(ctx, p)
 }
+
+// ---- order hooks (used by the orders module inside its transactions) ----
+
+// Movement types written for orders.
+const (
+	TypeSale  = "SALE"
+	TypeWaste = "WASTE"
+)
+
+// ErrReservationMismatch means reserved stock does not match open orders (INV-3 broken).
+var ErrReservationMismatch = errors.New("inventory: reservation does not match the order")
+
+// Reserve adds qty to the product's reserved stock if that much is available. It returns false,
+// without changing anything, when stock is insufficient. The caller holds the order-creation lock
+// and has locked the product row FOR SHARE.
+func Reserve(ctx context.Context, q *store.Queries, productID int64, qty int32) (bool, error) {
+	b, err := q.ReserveStock(ctx, store.ReserveStockParams{ProductID: productID, Qty: qty})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	p, err := q.GetProduct(ctx, productID)
+	if err != nil {
+		return false, err
+	}
+	return true, evaluateLowStock(ctx, q, p, b, false)
+}
+
+// Release returns qty reserved units to available stock (cancellation or expiry).
+func Release(ctx context.Context, q *store.Queries, productID int64, qty int32) error {
+	if qty == 0 {
+		return nil
+	}
+	_, err := q.ReleaseReservation(ctx, store.ReleaseReservationParams{ProductID: productID, Qty: qty})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: cannot release %d of product %d", ErrReservationMismatch, qty, productID)
+	}
+	return err
+}
+
+// ConsumeReserved takes qty reserved units out of physical stock at average cost for an order —
+// a SALE at completion or WASTE when a prepared order is cancelled — and writes the ledger row.
+// The unique index on (order_id, product_id, movement_type) makes a second call for the same line
+// fail instead of deducting twice (INV-5). Returns the cost removed.
+func ConsumeReserved(ctx context.Context, q *store.Queries, productID int64, qty int32, typ string, orderID int64, actor audit.Actor) (int64, error) {
+	if typ != TypeSale && typ != TypeWaste {
+		return 0, fmt.Errorf("inventory: %s is not an order movement", typ)
+	}
+	prod, bal, err := lockTracked(ctx, q, productID)
+	if err != nil {
+		return 0, err
+	}
+	if bal.Reserved < qty || bal.OnHand < qty {
+		return 0, fmt.Errorf("%w: product %d reserved=%d on_hand=%d, need %d", ErrReservationMismatch, productID, bal.Reserved, bal.OnHand, qty)
+	}
+	cost := ConsumeCost(bal.InventoryValueRial, bal.OnHand, qty)
+	nb, err := q.ConsumeReservedStock(ctx, store.ConsumeReservedStockParams{ProductID: productID, Qty: qty, Cost: cost})
+	if err != nil {
+		return 0, err
+	}
+	if _, err := q.InsertMovement(ctx, store.InsertMovementParams{
+		ProductID: productID, MovementType: typ, QuantityDelta: -qty, ValueDeltaRial: -cost,
+		OnHandAfter: nb.OnHand, ValueAfterRial: nb.InventoryValueRial,
+		OrderID:     pgtype.Int8{Int64: orderID, Valid: true},
+		ActorUserID: pgtype.Int8{Int64: actor.UserID, Valid: actor.Kind == audit.KindUser},
+	}); err != nil {
+		return 0, err
+	}
+	return cost, evaluateLowStock(ctx, q, prod, nb, false)
+}
