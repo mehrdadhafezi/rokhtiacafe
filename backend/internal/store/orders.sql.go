@@ -780,17 +780,6 @@ func (q *Queries) NextExpiredPendingOrder(ctx context.Context) (int64, error) {
 	return id, err
 }
 
-const orderExistsByIdempotencyKey = `-- name: OrderExistsByIdempotencyKey :one
-SELECT EXISTS (SELECT 1 FROM orders WHERE idempotency_key = $1)::bool
-`
-
-func (q *Queries) OrderExistsByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, orderExistsByIdempotencyKey, idempotencyKey)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const releaseReservation = `-- name: ReleaseReservation :one
 UPDATE inventory_balances SET reserved = reserved - $1
 WHERE product_id = $2 AND reserved >= $1

@@ -103,7 +103,6 @@ type Querier interface {
 	NextDisplayNumber(ctx context.Context, businessDate pgtype.Date) (int32, error)
 	// One order per transaction; the lock taken here is the one held while it is cancelled (F2).
 	NextExpiredPendingOrder(ctx context.Context) (int64, error)
-	OrderExistsByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (bool, error)
 	// Readiness probe: proves the runtime role can run a query.
 	Ping(ctx context.Context) (int32, error)
 	// Active categories and products only. Exact stock is never exposed, only availability.

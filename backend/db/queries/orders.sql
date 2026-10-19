@@ -8,9 +8,6 @@ SELECT now()::timestamptz;
 -- name: GetOrderByIdempotencyKey :one
 SELECT * FROM orders WHERE idempotency_key = $1;
 
--- name: OrderExistsByIdempotencyKey :one
-SELECT EXISTS (SELECT 1 FROM orders WHERE idempotency_key = $1)::bool;
-
 -- name: GetOrderByTrackingHash :one
 SELECT * FROM orders WHERE tracking_token_hash = $1;
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -180,4 +181,46 @@ func TestPerDeviceOrderRateLimit(t *testing.T) {
 	expect(t, resp, body, http.StatusTooManyRequests, "RATE_LIMITED")
 	resp, body = placeOrder(c, firstKey, line(espresso, 1, 950000))
 	expect(t, resp, body, http.StatusOK, "") // replay passes the limiter
+}
+
+// Review finding: simultaneous retries of one new key are not charged against rate limits.
+func TestConcurrentRetriesOfNewKeyAreNotRateLimited(t *testing.T) {
+	e := newEnv(t)
+	admin := e.newClient().login("admin", adminPassword)
+	_, _, espresso, _, _ := seedCatalog(t, admin)
+	key := newUUID()
+	var wg sync.WaitGroup
+	codes := make([]int, 10)
+	start := make(chan struct{})
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			resp, _ := placeOrder(e.newClient(), key, line(espresso, 1, 950000))
+			codes[i] = resp.StatusCode
+		}()
+	}
+	close(start)
+	wg.Wait()
+	created := 0
+	for _, c := range codes {
+		switch c {
+		case http.StatusCreated:
+			created++
+		case http.StatusOK:
+		default:
+			t.Errorf("status %d among concurrent retries %v", c, codes)
+		}
+	}
+	if created != 1 {
+		t.Errorf("created %d orders, want 1 (%v)", created, codes)
+	}
+	// Only the one real order was charged: five more new orders from the device still fit.
+	for i := 0; i < 5; i++ {
+		resp, body := placeOrder(e.newClient(), newUUID(), line(espresso, 1, 950000))
+		expect(t, resp, body, http.StatusCreated, "")
+	}
+	resp, body := placeOrder(e.newClient(), newUUID(), line(espresso, 1, 950000))
+	expect(t, resp, body, http.StatusTooManyRequests, "RATE_LIMITED")
 }

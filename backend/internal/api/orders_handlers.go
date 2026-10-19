@@ -63,6 +63,11 @@ func (a *API) writeOrderError(w http.ResponseWriter, r *http.Request, err error)
 	}
 }
 
+// rateLimitError carries the limiter's wait out of orders.Create.
+type rateLimitError struct{ wait time.Duration }
+
+func (rateLimitError) Error() string { return "rate limited" }
+
 // ---- views ----
 
 type publicItemView struct {
@@ -179,22 +184,19 @@ func (a *API) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := a.clientIP(r)
-	exists, err := a.d.Orders.KeyExists(r.Context(), key)
-	if err != nil {
-		a.internal(w, r, err)
-		return
-	}
-	if !exists { // replays of an existing key are never rate limited
+	clientID := strings.ToLower(r.Header.Get(ClientIDHeader))
+	// Rate limits are charged inside Create, under the creation lock and after the replay check,
+	// so retries of a request that already exists or is still in flight are never limited.
+	admit := func() error {
 		if ok, wait := a.d.OrderPerIP.Allow(ip.String()); !ok {
-			rateLimited(w, wait)
-			return
+			return rateLimitError{wait}
 		}
-		if id := r.Header.Get(ClientIDHeader); clientIDRE.MatchString(id) {
-			if ok, wait := a.d.OrderPerClient.Allow(strings.ToLower(id)); !ok {
-				rateLimited(w, wait)
-				return
+		if clientIDRE.MatchString(clientID) {
+			if ok, wait := a.d.OrderPerClient.Allow(clientID); !ok {
+				return rateLimitError{wait}
 			}
 		}
+		return nil
 	}
 	var in struct {
 		CustomerLabel string        `json:"customer_label"`
@@ -205,7 +207,12 @@ func (a *API) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, created, err := a.d.Orders.Create(r.Context(), orders.CreateInput{
-		Key: key, ClientIP: ip, Label: in.CustomerLabel, Note: in.CustomerNote, Items: in.Items})
+		Key: key, ClientIP: ip, Label: in.CustomerLabel, Note: in.CustomerNote, Items: in.Items, Admit: admit})
+	var limited rateLimitError
+	if errors.As(err, &limited) {
+		rateLimited(w, limited.wait)
+		return
+	}
 	if err != nil {
 		a.writeOrderError(w, r, err)
 		return

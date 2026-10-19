@@ -21,6 +21,7 @@ import (
 	"net/netip"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -109,10 +110,11 @@ type Config struct {
 
 // Service holds order operations.
 type Service struct {
-	pool   *pgxpool.Pool
-	cfg    Config
-	closed atomic.Bool // kill switch (in memory, owner decision O4)
-	now    func() time.Time
+	pool     *pgxpool.Pool
+	cfg      Config
+	closed   atomic.Bool // kill switch (in memory, owner decision O4)
+	switchMu sync.Mutex  // orders switch changes with their audit rows
+	now      func() time.Time
 }
 
 // New returns an order service.
@@ -169,12 +171,21 @@ func (s *Service) IsOpen(t time.Time) bool {
 func (s *Service) SwitchOpen() bool { return !s.closed.Load() }
 
 // SetOrderingOpen flips the kill switch and audits it.
+// The in-memory state changes only after the audit row commits, so a failed request never
+// leaves ordering silently opened or closed.
 func (s *Service) SetOrderingOpen(ctx context.Context, actor audit.Actor, open bool) error {
-	return store.InTx(ctx, s.pool, func(q *store.Queries) error {
-		prev := !s.closed.Swap(!open)
+	s.switchMu.Lock()
+	defer s.switchMu.Unlock()
+	prev := !s.closed.Load()
+	err := store.InTx(ctx, s.pool, func(q *store.Queries) error {
 		return audit.Record(ctx, q, actor, audit.Entry{Action: "ordering.switch", EntityType: "ordering", EntityID: "public",
 			Details: map[string]any{"open": []bool{prev, open}}})
 	})
+	if err != nil {
+		return err
+	}
+	s.closed.Store(!open)
+	return nil
 }
 
 // ---- create ----
@@ -193,6 +204,10 @@ type CreateInput struct {
 	Label    string
 	Note     string
 	Items    []Item
+	// Admit, if set, is called under the creation lock only for requests that will create a new
+	// order (after the replay check), so duplicates of an in-flight or finished request are never
+	// charged against rate limits. A non-nil error aborts the request unchanged.
+	Admit func() error
 }
 
 func validate(in *CreateInput) ValidationError {
@@ -241,11 +256,6 @@ func requestHash(in CreateInput) []byte {
 
 func text(s string) pgtype.Text { return pgtype.Text{String: s, Valid: s != ""} }
 
-// KeyExists reports whether an order with this idempotency key exists (replays skip rate limits).
-func (s *Service) KeyExists(ctx context.Context, key pgtype.UUID) (bool, error) {
-	return store.New(s.pool).OrderExistsByIdempotencyKey(ctx, key)
-}
-
 // Create places a public order (docs/WORKFLOWS.md §1.2). created=false means an idempotent replay
 // that returns the order's current state.
 func (s *Service) Create(ctx context.Context, in CreateInput) (d Detail, created bool, err error) {
@@ -269,6 +279,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (d Detail, created
 			return err
 		}
 
+		if in.Admit != nil {
+			if err := in.Admit(); err != nil {
+				return err
+			}
+		}
 		if !s.IsOpen(s.now()) {
 			return ErrOrderingClosed
 		}

@@ -810,3 +810,28 @@ func TestListOrders(t *testing.T) {
 		t.Errorf("all = %d, newest first", len(all))
 	}
 }
+
+// Review finding: the kill switch only changes when its audit row commits.
+func TestOrderingSwitchUnchangedWhenAuditFails(t *testing.T) {
+	f := setup(t)
+	cancelled, cancel := context.WithCancel(f.ctx)
+	cancel()
+	if err := f.svc.SetOrderingOpen(cancelled, f.staff, false); err == nil {
+		t.Fatal("expected an error with a cancelled context")
+	}
+	if !f.svc.SwitchOpen() {
+		t.Fatal("switch closed although the change was not recorded")
+	}
+	f.must(f.svc.SetOrderingOpen(f.ctx, f.staff, false))
+	if f.svc.SwitchOpen() {
+		t.Fatal("switch did not close")
+	}
+	if err := f.svc.SetOrderingOpen(cancelled, f.staff, true); err == nil || f.svc.SwitchOpen() {
+		t.Fatal("a failed reopen must leave ordering closed")
+	}
+	var n int
+	f.must(f.pool.QueryRow(f.ctx, `SELECT count(*) FROM audit_logs WHERE action = 'ordering.switch'`).Scan(&n))
+	if n != 1 {
+		t.Errorf("switch audit rows = %d, want 1", n)
+	}
+}
