@@ -6,16 +6,20 @@
   ./scripts/dev.ps1 setup     # create .env, start PostgreSQL, apply migrations
   ./scripts/dev.ps1 run       # run the API server
   ./scripts/dev.ps1 check     # gofmt + vet + tests (incl. PostgreSQL integration) + sqlc diff
+  ./scripts/dev.ps1 fe-dev    # frontend dev server on http://127.0.0.1:5173 (proxies /api to :8080)
+  ./scripts/dev.ps1 fe-check  # frontend typecheck + lint + tests + build + PWA check (same as CI)
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'db-up', 'db-down', 'db-reset', 'migrate', 'status', 'run', 'build', 'fmt', 'vet', 'test', 'sqlc', 'sqlc-diff', 'smoke', 'check', 'help')]
+    [ValidateSet('setup', 'db-up', 'db-down', 'db-reset', 'migrate', 'status', 'run', 'build', 'fmt', 'vet', 'test', 'sqlc', 'sqlc-diff', 'smoke', 'check',
+        'fe-install', 'fe-dev', 'fe-test', 'fe-build', 'fe-check', 'help')]
     [string]$Command = 'help'
 )
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Backend = Join-Path $Root 'backend'
+$Frontend = Join-Path $Root 'frontend'
 $SqlcImage = 'sqlc/sqlc:1.29.0'
 
 # Use the verified Go install even if this shell's PATH is stale.
@@ -32,6 +36,14 @@ function Invoke-Step([string]$Name, [scriptblock]$Block) {
 function In-Backend([scriptblock]$Block) {
     Push-Location $Backend
     try { & $Block } finally { Pop-Location }
+}
+
+function In-Frontend([scriptblock]$Block) {
+    Push-Location $Frontend
+    try {
+        if (-not (Test-Path 'node_modules')) { Invoke-Step 'npm ci' { npm ci } }
+        & $Block
+    } finally { Pop-Location }
 }
 
 function Ensure-Env {
@@ -97,6 +109,20 @@ switch ($Command) {
         }
         Sqlc 'diff'
         Write-Host 'All checks passed.' -ForegroundColor Green
+    }
+    'fe-install' { Push-Location $Frontend; try { Invoke-Step 'npm ci' { npm ci } } finally { Pop-Location } }
+    'fe-dev'     { In-Frontend { npm run dev } }
+    'fe-test'    { In-Frontend { Invoke-Step 'vitest' { npm test } } }
+    'fe-build'   { In-Frontend { Invoke-Step 'vite build' { npm run build } } }
+    'fe-check' {
+        In-Frontend {
+            Invoke-Step 'typecheck' { npm run typecheck }
+            Invoke-Step 'eslint' { npm run lint -- --max-warnings=0 }
+            Invoke-Step 'vitest' { npm test }
+            Invoke-Step 'vite build' { npm run build }
+            Invoke-Step 'PWA separation check' { npm run check:pwa }
+        }
+        Write-Host 'Frontend checks passed.' -ForegroundColor Green
     }
     default { Get-Help $PSCommandPath -Detailed }
 }
