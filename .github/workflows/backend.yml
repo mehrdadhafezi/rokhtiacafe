@@ -74,6 +74,9 @@ jobs:
           ./bin/rokh migrate status | tee status.txt
           grep -q ", 0 pending" status.txt
 
+      - name: Invariant check on migrated schema
+        run: ./bin/rokh check
+
       - name: Smoke test + graceful shutdown
         run: |
           ./bin/rokh serve > serve.log 2>&1 &

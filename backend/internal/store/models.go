@@ -3,3 +3,216 @@
 //   sqlc v1.29.0
 
 package store
+
+import (
+	"net/netip"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type AuditLog struct {
+	ID          int64
+	ActorUserID pgtype.Int8
+	ActorKind   string
+	Action      string
+	EntityType  string
+	EntityID    string
+	Details     []byte
+	Ip          *netip.Addr
+	CreatedAt   pgtype.Timestamptz
+}
+
+type Category struct {
+	ID        int64
+	Name      string
+	SortOrder int32
+	IsActive  bool
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type Expense struct {
+	ID             int64
+	Category       string
+	AmountRial     int64
+	ExpenseDate    pgtype.Date
+	Description    string
+	IdempotencyKey pgtype.UUID
+	CreatedBy      int64
+	CreatedAt      pgtype.Timestamptz
+	VoidedAt       pgtype.Timestamptz
+	VoidedBy       pgtype.Int8
+	VoidReason     pgtype.Text
+}
+
+type InventoryBalance struct {
+	ProductID          int64
+	OnHand             int32
+	Reserved           int32
+	InventoryValueRial int64
+	LastUnitCostRial   pgtype.Int8
+	LowStockAlertedAt  pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+type InventoryMovement struct {
+	ID              int64
+	ProductID       int64
+	MovementType    string
+	ReasonCode      pgtype.Text
+	QuantityDelta   int32
+	ValueDeltaRial  int64
+	OnHandAfter     int32
+	ValueAfterRial  int64
+	OrderID         pgtype.Int8
+	PurchaseEntryID pgtype.Int8
+	Note            pgtype.Text
+	ActorUserID     pgtype.Int8
+	IdempotencyKey  pgtype.UUID
+	CreatedAt       pgtype.Timestamptz
+}
+
+type NotificationEvent struct {
+	ID             int64
+	EventType      string
+	DedupKey       string
+	SubscriptionID pgtype.Int8
+	ProductID      pgtype.Int8
+	Payload        []byte
+	Status         string
+	Attempts       int32
+	NextAttemptAt  pgtype.Timestamptz
+	ClaimToken     pgtype.UUID
+	LeaseUntil     pgtype.Timestamptz
+	LastError      pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+	SentAt         pgtype.Timestamptz
+}
+
+type Order struct {
+	ID                int64
+	BusinessDate      pgtype.Date
+	DisplayNumber     int32
+	TrackingTokenHash []byte
+	IdempotencyKey    pgtype.UUID
+	RequestHash       []byte
+	ClientKey         []byte
+	CustomerLabel     pgtype.Text
+	CustomerNote      pgtype.Text
+	Status            string
+	TotalRial         int64
+	PaidRial          int64
+	RefundedRial      int64
+	PaymentStatus     pgtype.Text
+	ExpiresAt         pgtype.Timestamptz
+	CancelReason      pgtype.Text
+	CancelNote        pgtype.Text
+	CreatedAt         pgtype.Timestamptz
+	AcceptedAt        pgtype.Timestamptz
+	ReadyAt           pgtype.Timestamptz
+	CompletedAt       pgtype.Timestamptz
+	CancelledAt       pgtype.Timestamptz
+	AcceptedBy        pgtype.Int8
+	CompletedBy       pgtype.Int8
+	CancelledBy       pgtype.Int8
+	UpdatedAt         pgtype.Timestamptz
+}
+
+type OrderItem struct {
+	ID                int64
+	OrderID           int64
+	ProductID         int64
+	ProductName       string
+	InventoryMode     string
+	UnitPriceRial     int64
+	Quantity          int32
+	LineTotalRial     int64
+	CogsRial          pgtype.Int8
+	EstimatedCostRial pgtype.Int8
+	WastedQuantity    int32
+}
+
+type Payment struct {
+	ID                int64
+	OrderID           int64
+	Kind              string
+	Method            string
+	AmountRial        int64
+	RefundOfPaymentID pgtype.Int8
+	Note              pgtype.Text
+	IdempotencyKey    pgtype.UUID
+	CreatedBy         int64
+	CreatedAt         pgtype.Timestamptz
+	VoidedAt          pgtype.Timestamptz
+	VoidedBy          pgtype.Int8
+	VoidReason        pgtype.Text
+}
+
+type Product struct {
+	ID                    int64
+	CategoryID            int64
+	Name                  string
+	Description           pgtype.Text
+	PriceRial             int64
+	InventoryMode         string
+	LowStockThreshold     pgtype.Int4
+	EstimatedUnitCostRial pgtype.Int8
+	IsActive              bool
+	IsAvailable           bool
+	ImagePath             pgtype.Text
+	SortOrder             int32
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+}
+
+type PurchaseEntry struct {
+	ID             int64
+	ProductID      int64
+	Quantity       int32
+	UnitCostRial   int64
+	TotalCostRial  int64
+	Supplier       pgtype.Text
+	PurchasedOn    pgtype.Date
+	Note           pgtype.Text
+	IdempotencyKey pgtype.UUID
+	CreatedBy      int64
+	CreatedAt      pgtype.Timestamptz
+	VoidedAt       pgtype.Timestamptz
+	VoidedBy       pgtype.Int8
+	VoidReason     pgtype.Text
+}
+
+type PushSubscription struct {
+	ID            int64
+	UserID        int64
+	Endpoint      string
+	P256dh        string
+	Auth          string
+	UserAgent     pgtype.Text
+	CreatedAt     pgtype.Timestamptz
+	LastSuccessAt pgtype.Timestamptz
+	FailureCount  int32
+}
+
+type Session struct {
+	TokenHash  []byte
+	UserID     int64
+	CsrfToken  string
+	CreatedAt  pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	Ip         *netip.Addr
+	UserAgent  pgtype.Text
+}
+
+type User struct {
+	ID           int64
+	Username     string
+	DisplayName  string
+	PasswordHash string
+	Role         string
+	IsActive     bool
+	LastLoginAt  pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}

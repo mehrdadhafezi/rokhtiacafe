@@ -9,6 +9,23 @@ import (
 )
 
 type Querier interface {
+	// INV-16 (only meaningful once users exist).
+	CheckActiveAdminExists(ctx context.Context) (CheckActiveAdminExistsRow, error)
+	// INV-4: on_hand and inventory value equal the sums of the movement ledger.
+	CheckBalancesMatchLedger(ctx context.Context) ([]CheckBalancesMatchLedgerRow, error)
+	// INV-8: every line of a completed order has cogs_rial; no other order has any.
+	CheckCompletedOrdersHaveCogs(ctx context.Context) ([]CheckCompletedOrdersHaveCogsRow, error)
+	// INV-11: paid/refunded amounts on orders equal the non-void payment rows.
+	CheckOrderPaymentTotals(ctx context.Context) ([]CheckOrderPaymentTotalsRow, error)
+	// INV-7b: order total = sum of its line totals.
+	CheckOrderTotals(ctx context.Context) ([]CheckOrderTotalsRow, error)
+	// INV-4: movements for a product without a balance row.
+	CheckOrphanLedgerProducts(ctx context.Context) ([]int64, error)
+	// Reconciliation queries for app-enforced invariants (docs/DATABASE.md §3). Each returns
+	// only violating rows, so an empty result means the invariant holds.
+	// INV-3: reserved = open (PENDING/PREPARING/READY) tracked order quantities.
+	CheckReservedMatchesOpenOrders(ctx context.Context) ([]CheckReservedMatchesOpenOrdersRow, error)
+	CheckTrackedProductsHaveBalance(ctx context.Context) ([]int64, error)
 	// Readiness probe: proves the runtime role can run a query.
 	Ping(ctx context.Context) (int32, error)
 }
