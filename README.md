@@ -30,7 +30,22 @@ Other commands: `db-up`, `db-down`, `db-reset`, `migrate`, `status`, `build`, `f
 `test`, `sqlc`, `sqlc-diff`, `smoke`. The server binary itself: `rokh serve | migrate up |
 migrate status | version`.
 
-Without Docker: install PostgreSQL 16+ locally, run
+### Frontend
+
+Requirements: Node 24, npm 11. Two Vite entry points share `src/components` and `src/lib`:
+`index.html` → customer app (`/menu…`, plain web, no service worker) and `admin/index.html` →
+staff app (`/admin/…`, installable PWA scoped to `/admin/`).
+
+```powershell
+./scripts/dev.ps1 fe-dev     # http://127.0.0.1:5173/menu and /admin/ (proxies /api, /healthz, /readyz to :8080)
+./scripts/dev.ps1 fe-check   # typecheck, ESLint, vitest, build, staff-only PWA check (same as CI)
+```
+
+Also `fe-install`, `fe-test`, `fe-build`, or the npm scripts in `frontend/package.json`.
+
+### Without Docker
+
+Install PostgreSQL 16+ locally, run
 `psql -U postgres -v owner_password=... -v app_password=... -v db_name=rokhtiacafe -f deploy/local/postgres/roles.sql`,
 and point `DATABASE_URL` / `MIGRATION_DATABASE_URL` / `TEST_DATABASE_ADMIN_URL` in `.env` at it.
 

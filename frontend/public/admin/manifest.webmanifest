@@ -1,0 +1,18 @@
+{
+  "name": "رخ تیا — پنل کارکنان",
+  "short_name": "رخ تیا",
+  "description": "پنل کارکنان کافه رخ تیا",
+  "id": "/admin/",
+  "start_url": "/admin/",
+  "scope": "/admin/",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "fa",
+  "background_color": "#FBF7F2",
+  "theme_color": "#6B4226",
+  "icons": [
+    { "src": "/admin/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/admin/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/admin/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

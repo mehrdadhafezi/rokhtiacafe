@@ -1,0 +1,33 @@
+/*
+ * Design tokens — docs/ARCHITECTURE.md §3.4. Light theme only for the MVP.
+ * The first block is the documented palette; the second maps it onto the variable
+ * names shadcn/ui components expect, so generated components pick up the café theme.
+ */
+:root {
+  --background: #fbf7f2; /* cream: page */
+  --surface: #ffffff; /* cards */
+  --foreground: #2b1e16; /* espresso: text */
+  --muted: #f1e8dd;
+  --muted-foreground: #6e5b4d;
+  --primary: #6b4226; /* coffee: main actions */
+  --primary-foreground: #fff8f0;
+  --accent: #b5835a; /* caramel: highlights, never for text */
+  --border: #e4d6c5;
+  --success: #2f6b4f;
+  --warning: #9a6212;
+  --danger: #b3261e;
+  --radius: 12px;
+
+  /* shadcn/ui aliases */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface);
+  --popover-foreground: var(--foreground);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--danger);
+  --destructive-foreground: #ffffff;
+  --input: var(--border);
+  --ring: var(--primary);
+}
