@@ -381,6 +381,7 @@ SELECT oi.product_id, p.name, oi.inventory_mode,
        sum(oi.line_total_rial)::int8 AS revenue,
        COALESCE(sum(oi.cogs_rial), 0)::int8 AS cogs,
        COALESCE(sum(oi.estimated_cost_rial), 0)::int8 AS estimated_cost,
+       COALESCE(sum(oi.line_total_rial) FILTER (WHERE oi.estimated_cost_rial IS NOT NULL), 0)::int8 AS estimated_revenue,
        count(oi.estimated_cost_rial)::int8 AS lines_with_estimate,
        count(*) FILTER (WHERE oi.inventory_mode = 'UNTRACKED' AND oi.estimated_cost_rial IS NULL)::int8 AS lines_without_estimate
 FROM order_items oi
@@ -404,6 +405,7 @@ type ReportProductsRow struct {
 	Revenue              int64
 	Cogs                 int64
 	EstimatedCost        int64
+	EstimatedRevenue     int64
 	LinesWithEstimate    int64
 	LinesWithoutEstimate int64
 }
@@ -427,6 +429,7 @@ func (q *Queries) ReportProducts(ctx context.Context, arg ReportProductsParams) 
 			&i.Revenue,
 			&i.Cogs,
 			&i.EstimatedCost,
+			&i.EstimatedRevenue,
 			&i.LinesWithEstimate,
 			&i.LinesWithoutEstimate,
 		); err != nil {

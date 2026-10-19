@@ -31,4 +31,19 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(q *Queries) error) er
 	return nil
 }
 
+// InSnapshot runs fn in a REPEATABLE READ, READ ONLY transaction: every query sees the same
+// committed state, so multi-query reports reconcile even while orders and payments change.
+func InSnapshot(ctx context.Context, pool *pgxpool.Pool, fn func(q *Queries) error) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("begin snapshot: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // read-only; rollback just ends it
+
+	if err := fn(New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 var _ DBTX = pgx.Tx(nil)

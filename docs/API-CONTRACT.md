@@ -208,7 +208,9 @@ and cancel responses list the amounts per method and the report separates `refun
 Monthly (Jalali) views are produced by the client by requesting the Jalali month's
 Gregorian date range and summing `daily`.
 
-`GET /admin/reports/products?from&to` → `{ from, to, items: [{ product_id, name, inventory_mode, quantity, revenue_rial, cogs_rial, gross_profit_rial, estimated_cost_rial|null, estimated_margin_rial|null, lines_without_estimate }] }`.
+`GET /admin/reports/products?from&to` → `{ from, to, items: [{ product_id, name, inventory_mode, quantity, revenue_rial, cogs_rial, gross_profit_rial, estimated_revenue_rial|null, estimated_cost_rial|null, estimated_margin_rial|null, lines_without_estimate }] }`.
+Estimated figures cover only lines sold while an estimate was set (`estimated_margin_rial = estimated_revenue_rial − estimated_cost_rial`);
+`lines_without_estimate` counts the rest. Report queries read one database snapshot.
 Revenue here is line revenue of orders completed in the range, before order-level refunds.
 For UNTRACKED products `cogs_rial` is 0 and the estimated fields carry the management estimate (F8);
 the UI labels them «تخمینی» and never adds them to the summary.

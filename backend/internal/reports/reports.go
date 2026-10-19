@@ -153,9 +153,19 @@ type Summary struct {
 }
 
 // Summary computes the report for an inclusive range of business dates. Every date in the range
-// has a daily entry, so the client can sum Jalali months from Gregorian days.
+// has a daily entry, so the client can sum Jalali months from Gregorian days. All queries read one
+// database snapshot, so the figures reconcile even while payments are being recorded.
 func (s *Service) Summary(ctx context.Context, r Range) (Summary, error) {
-	q := store.New(s.Pool)
+	var out Summary
+	err := store.InSnapshot(ctx, s.Pool, func(q *store.Queries) error {
+		var err error
+		out, err = s.summary(ctx, q, r)
+		return err
+	})
+	return out, err
+}
+
+func (s *Service) summary(ctx context.Context, q *store.Queries, r Range) (Summary, error) {
 	fromTs, toTs := s.timestamps(r)
 	fromDate, toDate := dates(r)
 	tz := s.Location.String()
@@ -261,16 +271,20 @@ func (s *Service) Summary(ctx context.Context, r Range) (Summary, error) {
 
 // ProductLine is one product in the product report.
 type ProductLine struct {
-	ProductID         int64  `json:"product_id"`
-	Name              string `json:"name"`
-	InventoryMode     string `json:"inventory_mode"`
-	Quantity          int64  `json:"quantity"`
-	RevenueRial       int64  `json:"revenue_rial"`
-	COGSRial          int64  `json:"cogs_rial"`
-	GrossProfitRial   int64  `json:"gross_profit_rial"`
-	EstimatedCostRial *int64 `json:"estimated_cost_rial"`   // UNTRACKED only; management estimate
-	EstimatedMargin   *int64 `json:"estimated_margin_rial"` // UNTRACKED only; never in the summary
-	LinesNoEstimate   int64  `json:"lines_without_estimate"`
+	ProductID       int64  `json:"product_id"`
+	Name            string `json:"name"`
+	InventoryMode   string `json:"inventory_mode"`
+	Quantity        int64  `json:"quantity"`
+	RevenueRial     int64  `json:"revenue_rial"`
+	COGSRial        int64  `json:"cogs_rial"`
+	GrossProfitRial int64  `json:"gross_profit_rial"`
+	// UNTRACKED only, management estimates that never enter the summary. They cover only the lines
+	// sold while an estimated unit cost was set: EstimatedRevenueRial is those lines' revenue and
+	// EstimatedMargin = EstimatedRevenueRial − EstimatedCostRial. LinesNoEstimate counts the rest.
+	EstimatedRevenueRial *int64 `json:"estimated_revenue_rial"`
+	EstimatedCostRial    *int64 `json:"estimated_cost_rial"`
+	EstimatedMargin      *int64 `json:"estimated_margin_rial"`
+	LinesNoEstimate      int64  `json:"lines_without_estimate"`
 }
 
 // Products reports per-product sales of orders completed in the range. Revenue is line revenue
@@ -278,7 +292,12 @@ type ProductLine struct {
 // an estimated cost and margin instead (F8), shown separately from gross profit.
 func (s *Service) Products(ctx context.Context, r Range) ([]ProductLine, error) {
 	fromTs, toTs := s.timestamps(r)
-	rows, err := store.New(s.Pool).ReportProducts(ctx, store.ReportProductsParams{FromTs: fromTs, ToTs: toTs})
+	var rows []store.ReportProductsRow
+	err := store.InSnapshot(ctx, s.Pool, func(q *store.Queries) error {
+		var err error
+		rows, err = q.ReportProducts(ctx, store.ReportProductsParams{FromTs: fromTs, ToTs: toTs})
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -287,8 +306,9 @@ func (s *Service) Products(ctx context.Context, r Range) ([]ProductLine, error) 
 		l := ProductLine{ProductID: row.ProductID, Name: row.Name, InventoryMode: row.InventoryMode, Quantity: row.Quantity,
 			RevenueRial: row.Revenue, COGSRial: row.Cogs, GrossProfitRial: row.Revenue - row.Cogs, LinesNoEstimate: row.LinesWithoutEstimate}
 		if row.InventoryMode == "UNTRACKED" && row.LinesWithEstimate > 0 {
-			est, margin := row.EstimatedCost, row.Revenue-row.EstimatedCost
-			l.EstimatedCostRial, l.EstimatedMargin = &est, &margin
+			rev, est := row.EstimatedRevenue, row.EstimatedCost
+			margin := rev - est
+			l.EstimatedRevenueRial, l.EstimatedCostRial, l.EstimatedMargin = &rev, &est, &margin
 		}
 		out = append(out, l)
 	}

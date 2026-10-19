@@ -396,3 +396,60 @@ func TestExpenses(t *testing.T) {
 		t.Errorf("list = %d", len(list))
 	}
 }
+
+// Review finding: a drink sold before and after its estimate was set gets a margin over the
+// estimated lines only, never revenue of unestimated lines minus partial costs.
+func TestEstimatedMarginCoversOnlyEstimatedLines(t *testing.T) {
+	f := setup(t)
+	_, err := f.pool.Exec(f.ctx, `UPDATE products SET estimated_unit_cost_rial = NULL WHERE id = $1`, f.espresso)
+	f.must(err)
+	f.order("COMPLETED", f.espressoItem(2)) // 180 000, no estimate
+	_, err = f.pool.Exec(f.ctx, `UPDATE products SET estimated_unit_cost_rial = 30000 WHERE id = $1`, f.espresso)
+	f.must(err)
+	f.order("COMPLETED", f.espressoItem(1)) // 90 000, estimate 30 000
+
+	lines, err := f.rep.Products(f.ctx, f.todayRange())
+	f.must(err)
+	if len(lines) != 1 {
+		t.Fatalf("lines = %+v", lines)
+	}
+	l := lines[0]
+	if l.RevenueRial != 270_000 || l.EstimatedRevenueRial == nil || *l.EstimatedRevenueRial != 90_000 ||
+		*l.EstimatedCostRial != 30_000 || *l.EstimatedMargin != 60_000 || l.LinesNoEstimate != 1 {
+		t.Errorf("line = %+v (estimated revenue %v, cost %v, margin %v)", l, deref(l.EstimatedRevenueRial), deref(l.EstimatedCostRial), deref(l.EstimatedMargin))
+	}
+}
+
+func deref(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// Review finding: InSnapshot reads one committed state for the whole transaction.
+func TestSnapshotIgnoresConcurrentCommits(t *testing.T) {
+	f := setup(t)
+	o := f.order("COMPLETED", f.espressoItem(1)) // 90 000 receivable
+	var before, after int64
+	err := store.InSnapshot(f.ctx, f.pool, func(q *store.Queries) error {
+		r, err := q.ReportReceivablesTotal(f.ctx)
+		if err != nil {
+			return err
+		}
+		before = r.Amount
+		f.pays(o, payments.MethodCash, 90_000) // commits on another connection mid-snapshot
+		r, err = q.ReportReceivablesTotal(f.ctx)
+		after = r.Amount
+		return err
+	})
+	f.must(err)
+	if before != 90_000 || after != 90_000 {
+		t.Errorf("snapshot saw %d then %d, want 90000 both times", before, after)
+	}
+	s, err := f.rep.Summary(f.ctx, f.todayRange())
+	f.must(err)
+	if s.Receivables.AmountRial != 0 || s.Totals.Collected["CASH"] != 90_000 {
+		t.Errorf("after commit: receivable %d cash %d", s.Receivables.AmountRial, s.Totals.Collected["CASH"])
+	}
+}
