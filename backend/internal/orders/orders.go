@@ -32,6 +32,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/payments"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/textutil"
 )
@@ -127,9 +128,10 @@ func (s *Service) SetClock(now func() time.Time) { s.now = now }
 
 // Detail is an order with its lines. Token is set only when returned to the creating customer.
 type Detail struct {
-	Order store.Order
-	Items []store.OrderItem
-	Token string
+	Order    store.Order
+	Items    []store.OrderItem
+	Payments []store.Payment // payment and refund rows, oldest first
+	Token    string
 }
 
 // ---- tokens & keys ----
@@ -392,7 +394,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (d Detail, created
 
 func loadDetail(ctx context.Context, q *store.Queries, o store.Order) (Detail, error) {
 	items, err := q.ListOrderItems(ctx, o.ID)
-	return Detail{Order: o, Items: items}, err
+	if err != nil {
+		return Detail{}, err
+	}
+	pays, err := q.ListOrderPayments(ctx, o.ID)
+	return Detail{Order: o, Items: items, Payments: pays}, err
 }
 
 // ---- customer tracking ----
@@ -449,7 +455,7 @@ func (s *Service) CustomerCancel(ctx context.Context, token string, ip netip.Add
 				reason = ReasonExpired // past its deadline: expire rather than record a customer cancel
 				actor = audit.Actor{Kind: audit.KindSystem}
 			}
-			o, err = s.cancelLocked(ctx, q, o, reason, "", actor, nil)
+			o, err = s.cancelLocked(ctx, q, o, reason, "", actor, nil, false)
 			if err != nil {
 				return err
 			}
@@ -510,7 +516,7 @@ func (s *Service) Accept(ctx context.Context, actor audit.Actor, id int64) (Deta
 		}
 		if !now.Time.Before(o.ExpiresAt.Time) {
 			expired = true
-			return s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil)
+			return s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil, false)
 		}
 		n, err := q.AcceptOrder(ctx, store.AcceptOrderParams{ID: o.ID, By: userBy(actor)})
 		if err != nil {
@@ -598,6 +604,8 @@ type WasteLine struct {
 type CancelInput struct {
 	Note  string
 	Waste []WasteLine
+	// AllowRefund lets the cancellation refund prepayments (policy action orders.cancel_prepaid).
+	AllowRefund bool
 }
 
 // Cancel cancels a PENDING/PREPARING/READY order. Reservations are released; wasted tracked units
@@ -619,14 +627,23 @@ func (s *Service) Cancel(ctx context.Context, actor audit.Actor, id int64, in Ca
 		if len(in.Waste) > 0 && o.Status == StatusPending {
 			return o, ValidationError{"waste": "only for orders already being prepared"}
 		}
-		return s.cancelLocked(ctx, q, o, ReasonStaff, in.Note, actor, in.Waste)
+		return s.cancelLocked(ctx, q, o, ReasonStaff, in.Note, actor, in.Waste, in.AllowRefund)
 	})
 }
 
-// cancelLocked cancels an order whose row is locked by the caller.
-func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Order, reason, note string, actor audit.Actor, waste []WasteLine) (store.Order, error) {
+// cancelLocked cancels an order whose row is locked by the caller. Money held for the order is
+// refunded first, one REFUND per PAYMENT (docs/WORKFLOWS.md §1.5 step 4), so the cancelled order
+// never keeps money (DB CHECK orders_no_money_when_cancelled).
+func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Order, reason, note string, actor audit.Actor, waste []WasteLine, allowRefund bool) (store.Order, error) {
+	var refunds []store.Payment
 	if o.PaidRial != o.RefundedRial {
-		return o, ErrPaymentState // refunds of prepayments arrive with payments (T7)
+		if !allowRefund || actor.Kind != audit.KindUser {
+			return o, ErrPaymentState
+		}
+		var err error
+		if refunds, o, err = payments.RefundAll(ctx, q, o, actor); err != nil {
+			return o, err
+		}
 	}
 	items, err := q.ListOrderItems(ctx, o.ID)
 	if err != nil {
@@ -686,6 +703,13 @@ func (s *Service) cancelLocked(ctx context.Context, q *store.Queries, o store.Or
 		return o, err
 	}
 	details := map[string]any{"reason": reason}
+	if len(refunds) > 0 {
+		handBack := map[string]int64{}
+		for _, r := range refunds {
+			handBack[r.Method] += r.AmountRial
+		}
+		details["refunded"] = handBack
+	}
 	if len(wasted) > 0 {
 		details["waste"] = wasted
 		details["waste_cost_rial"] = wasteCost
@@ -716,7 +740,7 @@ func (s *Service) ExpireDue(ctx context.Context) (int, error) {
 				return err
 			}
 			found = true
-			_, err = s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil)
+			_, err = s.cancelLocked(ctx, q, o, ReasonExpired, "", audit.Actor{Kind: audit.KindSystem}, nil, false)
 			return err
 		})
 		if err != nil {

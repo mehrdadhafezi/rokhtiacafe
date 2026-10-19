@@ -16,6 +16,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/payments"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
@@ -46,6 +47,7 @@ type API struct {
 	users     *users.Service
 	catalog   *catalog.Service
 	inventory *inventory.Service
+	payments  *payments.Service
 	handler   http.Handler
 	perms     map[string]auth.Action // "METHOD /api/v1/admin/..." → action
 }
@@ -54,7 +56,8 @@ type API struct {
 func New(d Deps) *API {
 	a := &API{d: d, q: store.New(d.Pool), users: &users.Service{Pool: d.Pool},
 		catalog: &catalog.Service{Pool: d.Pool, Images: d.Images}, perms: map[string]auth.Action{},
-		inventory: &inventory.Service{Pool: d.Pool, Location: d.Location}}
+		inventory: &inventory.Service{Pool: d.Pool, Location: d.Location},
+		payments:  &payments.Service{Pool: d.Pool}}
 
 	r := chi.NewRouter()
 
@@ -106,6 +109,9 @@ func New(d Deps) *API {
 		g.handle(http.MethodPost, "/orders/{id}/complete", auth.ActOrdersTransition, a.transition(opComplete))
 		g.handle(http.MethodPost, "/orders/{id}/cancel", auth.ActOrdersTransition, a.cancelOrder)
 		g.handle(http.MethodPut, "/ordering", auth.ActOrderingToggle, a.setOrdering)
+		g.handle(http.MethodPost, "/orders/{id}/payments", auth.ActPaymentsRecord, a.recordPayment)
+		g.handle(http.MethodPost, "/orders/{id}/refund", auth.ActPaymentsRefund, a.refundOrder)
+		g.handle(http.MethodPost, "/payments/{id}/void", auth.ActPaymentsVoid, a.voidPayment)
 
 		g.handle(http.MethodGet, "/inventory", auth.ActInventoryViewQty, a.listInventory)
 		g.handle(http.MethodGet, "/inventory/{id}/movements", auth.ActInventoryViewCost, a.listMovements)

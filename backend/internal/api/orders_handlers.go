@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/orders"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
@@ -152,6 +153,7 @@ type adminOrderView struct {
 	CompletedBy   *int64          `json:"completed_by"`
 	CancelledBy   *int64          `json:"cancelled_by"`
 	Items         []adminItemView `json:"items"`
+	Payments      []paymentView   `json:"payments"`
 }
 
 func toAdminOrder(d orders.Detail, showCost bool) adminOrderView {
@@ -162,7 +164,10 @@ func toAdminOrder(d orders.Detail, showCost bool) adminOrderView {
 		ExpiresAt: o.ExpiresAt.Time, CreatedAt: o.CreatedAt.Time, AcceptedAt: optTime(o.AcceptedAt), ReadyAt: optTime(o.ReadyAt),
 		CompletedAt: optTime(o.CompletedAt), CancelledAt: optTime(o.CancelledAt), CancelReason: optText(o.CancelReason),
 		CancelNote: optText(o.CancelNote), AcceptedBy: optInt64(o.AcceptedBy), CompletedBy: optInt64(o.CompletedBy),
-		CancelledBy: optInt64(o.CancelledBy), Items: []adminItemView{}}
+		CancelledBy: optInt64(o.CancelledBy), Items: []adminItemView{}, Payments: []paymentView{}}
+	for _, p := range d.Payments {
+		v.Payments = append(v.Payments, toPaymentView(p))
+	}
 	for _, it := range d.Items {
 		iv := adminItemView{ID: it.ID, ProductID: it.ProductID, Name: it.ProductName, InventoryMode: it.InventoryMode,
 			Quantity: it.Quantity, UnitPriceRial: it.UnitPriceRial, LineTotalRial: it.LineTotalRial, WastedQuantity: it.WastedQuantity}
@@ -353,7 +358,8 @@ func (a *API) cancelOrder(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	d, err := a.d.Orders.Cancel(r.Context(), a.actor(r), id, orders.CancelInput{Note: in.Note, Waste: in.Waste})
+	d, err := a.d.Orders.Cancel(r.Context(), a.actor(r), id, orders.CancelInput{Note: in.Note, Waste: in.Waste,
+		AllowRefund: auth.Can(auth.FromContext(r.Context()).Role, auth.ActCancelWithRefund)})
 	if err != nil {
 		a.writeOrderError(w, r, err)
 		return

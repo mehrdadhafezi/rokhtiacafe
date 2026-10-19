@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	AcceptOrder(ctx context.Context, arg AcceptOrderParams) (Order, error)
+	AddOrderPaid(ctx context.Context, arg AddOrderPaidParams) (Order, error)
 	// Serializes a class of operations for the rest of the transaction (docs/DATABASE.md §3.1).
 	AdvisoryXactLock(ctx context.Context, key int64) error
 	AvailableStock(ctx context.Context, ids []int64) ([]AvailableStockRow, error)
@@ -28,6 +29,8 @@ type Querier interface {
 	CheckOrderTotals(ctx context.Context) ([]CheckOrderTotalsRow, error)
 	// INV-4: movements for a product without a balance row.
 	CheckOrphanLedgerProducts(ctx context.Context) ([]int64, error)
+	// F9: every REFUND returns exactly one non-void PAYMENT of the same order, method and amount.
+	CheckRefundsMirrorPayments(ctx context.Context) ([]CheckRefundsMirrorPaymentsRow, error)
 	// Reconciliation queries for app-enforced invariants (docs/DATABASE.md §3). Each returns
 	// only violating rows, so an empty result means the invariant holds.
 	// INV-3: reserved = open (PENDING/PREPARING/READY) tracked order quantities.
@@ -65,6 +68,11 @@ type Querier interface {
 	GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Order, error)
 	GetOrderByTrackingHash(ctx context.Context, trackingTokenHash []byte) (Order, error)
 	GetOrderForUpdate(ctx context.Context, id int64) (Order, error)
+	// Payments and refunds (docs/DATABASE.md §2.10, docs/WORKFLOWS.md §3).
+	// Every payment change runs under the parent order's row lock (F1); lock order: order → payments.
+	GetPayment(ctx context.Context, id int64) (Payment, error)
+	GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Payment, error)
+	GetPaymentForUpdate(ctx context.Context, id int64) (Payment, error)
 	GetProduct(ctx context.Context, id int64) (Product, error)
 	GetProductEstimate(ctx context.Context, id int64) (pgtype.Int8, error)
 	// Inventory: balances, the movement ledger and purchases (docs/DATABASE.md §2.5–2.7, §5.1).
@@ -85,6 +93,9 @@ type Querier interface {
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertMovement(ctx context.Context, arg InsertMovementParams) (InventoryMovement, error)
 	InsertNotificationEvent(ctx context.Context, arg InsertNotificationEventParams) error
+	InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error)
+	// Non-void PAYMENT rows that a full refund returns, one REFUND each.
+	ListActiveOrderPaymentsForUpdate(ctx context.Context, orderID int64) ([]Payment, error)
 	// Low-stock alerts go to active ADMIN users only (D11).
 	ListAdminPushSubscriptions(ctx context.Context) ([]int64, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
@@ -94,6 +105,7 @@ type Querier interface {
 	ListMovements(ctx context.Context, arg ListMovementsParams) ([]InventoryMovement, error)
 	ListOrderItems(ctx context.Context, orderID int64) ([]OrderItem, error)
 	ListOrderItemsForOrders(ctx context.Context, orderIds []int64) ([]OrderItem, error)
+	ListOrderPayments(ctx context.Context, orderID int64) ([]Payment, error)
 	ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
 	ListPurchases(ctx context.Context, arg ListPurchasesParams) ([]PurchaseEntry, error)
@@ -111,6 +123,7 @@ type Querier interface {
 	// Atomic reservation: succeeds only while enough is available (no oversell).
 	ReserveStock(ctx context.Context, arg ReserveStockParams) (InventoryBalance, error)
 	SetLowStockAlerted(ctx context.Context, productID int64) (pgtype.Timestamptz, error)
+	SetOrderFullyRefunded(ctx context.Context, id int64) (Order, error)
 	SetOrderItemCost(ctx context.Context, arg SetOrderItemCostParams) error
 	SetOrderItemWaste(ctx context.Context, arg SetOrderItemWasteParams) error
 	SetProductAvailability(ctx context.Context, arg SetProductAvailabilityParams) (Product, error)
@@ -122,6 +135,7 @@ type Querier interface {
 	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
 	UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
+	VoidPayment(ctx context.Context, arg VoidPaymentParams) (Payment, error)
 	VoidPurchase(ctx context.Context, arg VoidPurchaseParams) (PurchaseEntry, error)
 }
 
