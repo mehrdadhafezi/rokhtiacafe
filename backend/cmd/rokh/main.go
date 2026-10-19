@@ -23,6 +23,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/api"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/check"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/database"
@@ -115,6 +116,10 @@ func serve(ctx context.Context) error {
 	}
 	defer pool.Close()
 
+	images, err := catalog.NewImageStore(cfg.UploadDir)
+	if err != nil {
+		return err
+	}
 	queries := store.New(pool)
 	sessions := auth.NewSessions(auth.SessionConfig{IdleTimeout: cfg.SessionIdle, MaxAge: cfg.SessionMaxAge})
 	apiHandler := api.New(api.Deps{
@@ -127,12 +132,17 @@ func serve(ctx context.Context) error {
 		TrustedProxies: cfg.TrustedProxies,
 		LoginPerIP:     ratelimit.New(20, 15*time.Minute),
 		LoginPerUser:   ratelimit.New(5, 15*time.Minute),
+		PublicPerIP:    ratelimit.New(600, time.Minute),
+		Images:         images,
+		Ordering:       cfg.Ordering,
+		Location:       cfg.Timezone,
 	})
 	handler := httpx.NewRouter(httpx.Deps{
 		Logger:     logger,
 		DB:         readiness{q: queries},
 		Production: cfg.IsProduction(),
 		API:        apiHandler.Handler(),
+		Media:      images.MediaHandler(),
 	})
 	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
 	srv := httpx.NewServer(cfg.HTTPAddr, handler, logger)

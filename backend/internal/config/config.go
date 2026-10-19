@@ -36,6 +36,9 @@ type Config struct {
 	SessionIdle    time.Duration
 	SessionMaxAge  time.Duration
 	TrustedProxies []netip.Prefix
+
+	UploadDir string
+	Ordering  OrderingHours
 }
 
 // IsProduction reports whether the app runs in production mode.
@@ -129,6 +132,12 @@ func Load() (Config, error) {
 			continue
 		}
 		c.TrustedProxies = append(c.TrustedProxies, p.Masked())
+	}
+
+	c.UploadDir = getenv("UPLOAD_DIR", "./data/uploads")
+	c.Ordering, err = ParseOrderingHours(getenv("ORDERING_HOURS", "08:00-23:00"))
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	return c, errors.Join(errs...)

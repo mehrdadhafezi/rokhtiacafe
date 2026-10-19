@@ -21,6 +21,8 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/api"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/database"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/migrate"
@@ -36,12 +38,13 @@ const (
 )
 
 type env struct {
-	t     *testing.T
-	ctx   context.Context
-	srv   *httptest.Server
-	pool  *pgxpool.Pool
-	api   *api.API
-	users *users.Service
+	t      *testing.T
+	ctx    context.Context
+	srv    *httptest.Server
+	pool   *pgxpool.Pool
+	api    *api.API
+	users  *users.Service
+	images *catalog.ImageStore
 }
 
 func newEnv(t *testing.T) *env {
@@ -64,6 +67,13 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(pool.Close)
 
+	images, err := catalog.NewImageStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hours, _ := config.ParseOrderingHours("00:00-24:00")
+	tehran, _ := time.LoadLocation("Asia/Tehran")
+
 	q := store.New(pool)
 	a := api.New(api.Deps{
 		Pool:   pool,
@@ -75,11 +85,14 @@ func newEnv(t *testing.T) *env {
 		},
 		LoginPerIP:   ratelimit.New(1000, time.Minute),
 		LoginPerUser: ratelimit.New(5, 15*time.Minute),
+		Images:       images,
+		Ordering:     hours,
+		Location:     tehran,
 	})
-	srv := httptest.NewServer(httpx.NewRouter(httpx.Deps{Logger: quiet, DB: pool, API: a.Handler()}))
+	srv := httptest.NewServer(httpx.NewRouter(httpx.Deps{Logger: quiet, DB: pool, API: a.Handler(), Media: images.MediaHandler()}))
 	t.Cleanup(srv.Close)
 
-	e := &env{t: t, ctx: ctx, srv: srv, pool: pool, api: a, users: &users.Service{Pool: pool}}
+	e := &env{t: t, ctx: ctx, srv: srv, pool: pool, api: a, users: &users.Service{Pool: pool}, images: images}
 	e.createUser("admin", "ADMIN", adminPassword)
 	return e
 }

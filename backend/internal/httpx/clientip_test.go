@@ -46,6 +46,7 @@ func TestDecodeJSON(t *testing.T) {
 		{`{"name":`, "application/json", 400},
 		{`{"name":"a"}{}`, "application/json", 400},
 		{`{"name":"a"}`, "text/plain", 415},
+		{`{"name":null}`, "application/json", 422},
 		{`{"name":"` + strings.Repeat("x", MaxJSONBody) + `"}`, "application/json", 413},
 	}
 	for _, c := range cases {

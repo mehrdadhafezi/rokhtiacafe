@@ -31,12 +31,21 @@ type Querier interface {
 	CheckReservedMatchesOpenOrders(ctx context.Context) ([]CheckReservedMatchesOpenOrdersRow, error)
 	CheckTrackedProductsHaveBalance(ctx context.Context) ([]int64, error)
 	CountActiveAdmins(ctx context.Context) (int64, error)
+	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
+	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteExpiredSessions(ctx context.Context, idleCutoff pgtype.Timestamptz) (int64, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 	DeleteUserSessions(ctx context.Context, userID int64) error
 	DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSessionsExceptParams) error
+	// Every TRACKED product has a balance row (created with the product or on a mode switch).
+	EnsureInventoryBalance(ctx context.Context, productID int64) error
+	GetCategory(ctx context.Context, id int64) (Category, error)
+	GetCategoryForUpdate(ctx context.Context, id int64) (Category, error)
+	GetInventoryBalanceForUpdate(ctx context.Context, productID int64) (InventoryBalance, error)
+	GetProduct(ctx context.Context, id int64) (Product, error)
+	GetProductForUpdate(ctx context.Context, id int64) (Product, error)
 	// Every request re-reads the user, so deactivation and role changes apply immediately.
 	GetSessionWithUser(ctx context.Context, tokenHash []byte) (GetSessionWithUserRow, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
@@ -44,12 +53,20 @@ type Querier interface {
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
+	ListCategories(ctx context.Context) ([]Category, error)
+	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	// Readiness probe: proves the runtime role can run a query.
 	Ping(ctx context.Context) (int32, error)
+	// Active categories and products only. Exact stock is never exposed, only availability.
+	PublicMenu(ctx context.Context) ([]PublicMenuRow, error)
+	SetProductAvailability(ctx context.Context, arg SetProductAvailabilityParams) (Product, error)
+	SetProductImage(ctx context.Context, arg SetProductImageParams) (Product, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	TouchSession(ctx context.Context, tokenHash []byte) error
 	TouchUserLogin(ctx context.Context, id int64) error
+	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
+	UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
 }
 
