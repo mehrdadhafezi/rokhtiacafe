@@ -1,0 +1,76 @@
+# Dedicated PostgreSQL 16 for Rokh Tia Café only (deploy/README.md §3). Never share it with
+# another application, and never point Rokh at another project's PostgreSQL.
+#
+# Server layout: /opt/rokh/postgres/compose.yaml, with deploy/local/postgres/{10-rokh-init.sh,roles.sql}
+# copied to /opt/rokh/postgres/initdb/. Run as root from /opt/rokh/postgres:
+#   docker compose up -d          # first start initialises the volume, roles and database
+#   docker compose ps             # STATUS must show (healthy)
+#
+# The port is published on 127.0.0.1 only: the rokh service on the host connects to
+# 127.0.0.1:${ROKH_PG_PORT}; nothing outside the host can reach PostgreSQL.
+# The ROKH_PG_* variables exist so tests can run a disposable copy; production keeps the defaults.
+name: rokh
+
+services:
+  postgres:
+    # Pin the exact image digest at install time (docker compose pull, then record
+    # `docker image inspect --format '{{index .RepoDigests 0}}'` in ROKH_PG_IMAGE). Debian-based:
+    # glibc collations stay stable across minor updates. Major upgrades: deploy/README.md §12.
+    image: ${ROKH_PG_IMAGE:-postgres:16-bookworm}
+    container_name: ${ROKH_PG_CONTAINER:-rokh-postgres}
+    hostname: rokh-postgres
+    restart: unless-stopped
+    # POSTGRES_PASSWORD (superuser) and ROKH_{OWNER,APP}_PASSWORD, ROKH_DB_NAME: used only when the
+    # volume is first initialised. Template: deploy/env/postgres.env.example (root, chmod 600).
+    env_file:
+      - ${ROKH_PG_ENV_FILE:-/etc/rokh/postgres.env}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=peer
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - max_connections=40 # rokh pool: 10; ops scripts and psql: a few
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - log_min_duration_statement=1000
+      - -c
+      - log_connections=off
+    ports:
+      - "127.0.0.1:${ROKH_PG_PORT:-15432}:5432"
+    networks:
+      - rokh-db
+    volumes:
+      - rokh-pgdata:/var/lib/postgresql/data
+      - ./initdb/10-rokh-init.sh:/docker-entrypoint-initdb.d/10-rokh-init.sh:ro
+      - ./initdb/roles.sql:/rokh/roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d $${ROKH_DB_NAME:-rokhtiacafe}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    # Clean shutdown (checkpoint) before Docker kills the container.
+    stop_grace_period: 60s
+    shm_size: 256mb
+    mem_limit: 1g
+    cpus: 1.5
+    # The root disk is ~90% full: cap Docker's JSON logs for this container.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  rokh-db:
+    name: ${ROKH_PG_NETWORK:-rokh-db}
+
+volumes:
+  rokh-pgdata:
+    name: ${ROKH_PG_VOLUME:-rokh-pgdata}

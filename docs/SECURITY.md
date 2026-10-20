@@ -74,6 +74,41 @@ expiry, staff cancellation, and the ADMIN kill switch (`PUT /admin/ordering`). A
 existing idempotency key is not counted against the limits.
 Limits reset on restart (acceptable for a single-instance app). Values are owner decision O6.
 
+### 5.1 Client IP behind the CDN (T14)
+
+Production chain: visitor → MizbanCloud edge → LiteSpeed on the origin → rokh on `127.0.0.1:18080`.
+rokh's direct peer is always LiteSpeed on loopback. The CDN edge addresses are *not* the proxy
+identity rokh sees; they can only appear inside `X-Forwarded-For`.
+
+- **Selection** (`internal/httpx/clientip.go`, tested): only when the peer is in `TRUSTED_PROXIES`,
+  walk the **first** `X-Forwarded-For` header line from the right and take the first address that
+  is not itself trusted, stopping at the first malformed entry (then the peer is used). A peer that
+  is not trusted is never overridden; that is the only guarantee rokh gives on its own.
+- **What rokh cannot check:** whether the right-most entry really is the address the trusted
+  proxy saw. Visitor-written entries are ignored *only if* LiteSpeed (and the CDN) append the real
+  peer to the end of that same header line. If the proxy passes the visitor's header through
+  unchanged, or puts the real peer in a second header line, the visitor chooses their own address
+  (`TestClientIPUpstreamFailureModes`, cases marked UNSAFE). LiteSpeed's actual behaviour on this
+  server is **not verified**.
+- **Ignored headers:** rokh never reads `MC_REAL_IP` or `X-Real-IP` (both sent by MizbanCloud),
+  and the LiteSpeed include removes them before proxying.
+- **Default:** `TRUSTED_PROXIES=127.0.0.1`. This does **not** by itself make the client IP
+  spoof-resistant: it means rokh trusts whatever LiteSpeed puts at the end of the header. If
+  LiteSpeed appends correctly, the visible client is the edge address (visitors behind one edge
+  share a bucket); if it does not, the address is visitor-controlled. Rate limits are abuse
+  controls only (§5), so the impact is weaker limits, not an authorisation bypass; still,
+  production client-IP handling is blocked until measured.
+- **Adding the edge ranges** to `TRUSTED_PROXIES` is correct only if LiteSpeed *appends* the edge
+  address to the header it receives. If it replaces the header, every visitor collapses to
+  `127.0.0.1`. Measure this before go-live (docs/HOSTING-ASSESSMENT.md, risk R1).
+- **Direct-to-origin requests** (bypassing the CDN): *if* LiteSpeed appends the real peer, that
+  untrusted address is selected even when the request forges edge addresses
+  (`TestClientIPBehindCDN`); if it does not append, the forged value wins (UNSAFE cases).
+- **Possible later hardening** (needs a separately approved code change, not in T14): read all
+  `X-Forwarded-For` lines, or a single header that the proxy overwrites with the real peer.
+- **Caching:** the CDN must not cache `/api/*`, `/admin/*` or HTML (risk R2). Order tracking
+  (`GET /public/order`, token in a header) sends `no-store`.
+
 ## 6. Input validation
 - Strict JSON decoding (`DisallowUnknownFields`), body size limits, explicit per-field validation in Go; mirrored Zod schemas in the frontend for UX only — the server is authoritative.
 - Text fields: trimmed, Unicode NFC, control characters removed, length-checked in runes. Persian/Arabic digits normalised to ASCII for numeric inputs.
@@ -92,13 +127,20 @@ Limits reset on restart (acceptable for a single-instance app). Values are owner
 - Panic recovery returns `500 INTERNAL` without stack traces; details only in logs with request id.
 
 ## 9. Data & secrets
-- PostgreSQL bound to localhost/unix socket.
+- PostgreSQL bound to localhost/unix socket (production: Docker port published on `127.0.0.1` only,
+  no `trust` authentication).
 - **Two database roles (F6):** `rokh_owner` runs migrations and owns all objects; the server runs as
   `rokh_app` with DML-only grants and no DELETE on financial/inventory/audit tables, so it cannot
   drop or disable the protective triggers. Neither is superuser, `CREATEROLE` or `CREATEDB`.
   Details: [DATABASE.md §6](DATABASE.md#6-protection-triggers-and-database-roles).
   `MIGRATION_DATABASE_URL` is only present when running `rokh migrate`, not in the service environment.
-- Secrets only in server `.env` (mode 0600): `DATABASE_URL`, `APP_SECRET_KEY`, `VAPID_PRIVATE_KEY`. Never logged.
+- Secrets only in the server settings files (deploy/README.md §2):
+  - `/etc/rokh/rokh.env` (root:rokh 0640): `DATABASE_URL`, `APP_SECRET_KEY`, `VAPID_PRIVATE_KEY`;
+  - `/etc/rokh/migrate.env` (root 0600): the owner role;
+  - `/etc/rokh/postgres.env` (root 0600): first-initialisation passwords.
+
+  They are never logged. The ops scripts pass database passwords in `PGPASSWORD` and hand settings
+  to the rokh binary through its environment, never as command arguments.
 - Logs exclude passwords, cookies, CSRF tokens, tracking tokens (logged as prefix only), push keys.
 - Backups encrypted at rest when copied off-server; restore tested before go-live.
 - CI runs `gitleaks` on every push/PR.

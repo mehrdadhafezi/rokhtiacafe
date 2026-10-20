@@ -1,32 +1,61 @@
-# VPS option (deploy/README.md §5). Install as /etc/systemd/system/rokh.service, then:
-#   sudo systemctl daemon-reload && sudo systemctl enable --now rokh
-# Assumes a dedicated user "rokh" with the layout in /home/rokh/rokh.
+# Rokh Tia Café service for the cPanel/WHM host (AlmaLinux 8, systemd 239) — deploy/README.md §6.
+# Install as /etc/systemd/system/rokh.service (root, 644), then with owner approval:
+#   systemctl daemon-reload && systemctl enable --now rokh
+#
+# Layout (deploy/README.md §2):
+#   /opt/rokh/bin/rokh           root:rokh 750    binary (read-only to the service)
+#   /etc/rokh/rokh.env           root:rokh 640    runtime settings and secrets
+#   /var/lib/rokh                root:rokh 750    working directory (contains no .env)
+#   /var/lib/rokh/uploads        rokh:rokh 750    product images: the only writable path
+# PostgreSQL runs in Docker (deploy/postgres/compose.yaml) and is reached on 127.0.0.1:15432, so
+# there is no dependency on a host postgresql.service. If the database is not up yet, rokh exits,
+# and systemd retries every 5 s without giving up.
 [Unit]
 Description=Rokh Tia Cafe (rokh serve)
-After=network-online.target postgresql.service
+Documentation=https://github.com/mehrdadhafezi/rokhtiacafe/blob/main/deploy/README.md
+After=network-online.target docker.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
+Type=simple
 User=rokh
 Group=rokh
-WorkingDirectory=/home/rokh/rokh
-ExecStart=/home/rokh/rokh/bin/rokh serve
-# Graceful: SIGTERM, requests drain within SHUTDOWN_TIMEOUT (15 s).
+WorkingDirectory=/var/lib/rokh
+EnvironmentFile=/etc/rokh/rokh.env
+ExecStart=/opt/rokh/bin/rokh serve
+# Graceful stop: SIGTERM, requests drain within SHUTDOWN_TIMEOUT (15 s), exit code 0.
 KillSignal=SIGTERM
+KillMode=mixed
 TimeoutStopSec=30
 Restart=on-failure
-RestartSec=3
+RestartSec=5
+UMask=0027
+LimitNOFILE=8192
+TasksMax=256
 
-# Hardening: the process only needs its uploads directory.
+# Hardening (all supported by systemd 239). The process needs: its binary, read access to the
+# settings, write access to the uploads directory, loopback TCP to PostgreSQL and LiteSpeed's
+# connections, and outbound HTTPS to the push services.
 NoNewPrivileges=true
-PrivateTmp=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/rokh/rokh/uploads
+ProtectHome=true
+ReadWritePaths=/var/lib/rokh/uploads
+PrivateTmp=true
+PrivateDevices=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RemoveIPC=true
 
 [Install]
 WantedBy=multi-user.target
