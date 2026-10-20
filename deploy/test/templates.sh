@@ -68,7 +68,54 @@ readme="$d/README.md"
 check "no cron line pipes a backup script" sh -c "! grep -Eq '^[0-9*][0-9*,/ -]* .*backup[a-z-]*\.sh.*\|' '$readme'"
 check "cron example runs backup-cron.sh" grep -Eq '^30 3 \* \* \* /opt/rokh/scripts/backup-cron\.sh$' "$readme"
 check "cron example runs backup-status.sh" grep -Eq '^0  9 \* \* \* /opt/rokh/scripts/backup-status\.sh$' "$readme"
-check "cron example sets MAILTO" grep -Eq '^MAILTO=' "$readme"
+check "cron example sets MAILTO without inline comment or spaces" grep -Eq '^MAILTO=[^[:space:]#]+
+check "monitoring section names both scripts" sh -c "sed -n '/^## 11\./,/^## 12\./p' '$readme' | grep -q backup-cron.sh && sed -n '/^## 11\./,/^## 12\./p' '$readme' | grep -q backup-status.sh"
+check "backup.sh is not scheduled directly anywhere" sh -c "! grep -rEq '^[0-9*][0-9*,/ -]* .*/backup\.sh' '$d' '$repo/docs'"
+
+echo "== systemd unit matches the layout"
+check "unit runs as a dedicated non-root user" sh -c "grep -q '^User=rokh$' '$unit' && ! grep -q '^User=root' '$unit'"
+check "unit ExecStart is ROKH_BIN" grep -q "^ExecStart=$(val "$env_ops" ROKH_BIN) serve\$" "$unit"
+check "unit EnvironmentFile is ROKH_ENV_FILE" grep -q "^EnvironmentFile=$(val "$env_ops" ROKH_ENV_FILE)\$" "$unit"
+check "unit can write UPLOAD_DIR only" test "$(grep '^ReadWritePaths=' "$unit" | cut -d= -f2)" = "$(val "$env_prod" UPLOAD_DIR)"
+check "unit has no host PostgreSQL dependency" sh -c "! grep -Eq '^(After|Requires|Wants)=.*postgresql' '$unit'"
+check "unit stop timeout exceeds SHUTDOWN_TIMEOUT" test "$(grep '^TimeoutStopSec=' "$unit" | cut -d= -f2)" -gt "$(val "$env_prod" SHUTDOWN_TIMEOUT | tr -d s)"
+for k in NoNewPrivileges ProtectSystem ProtectHome PrivateTmp CapabilityBoundingSet; do
+  check "unit sets $k" grep -q "^$k=" "$unit"
+done
+if command -v systemd-analyze > /dev/null && [ -d /run/systemd/system ]; then
+  tmpu="$(mktemp -d)"
+  sed -e 's#^ExecStart=.*#ExecStart=/bin/true#' -e '/^EnvironmentFile=/d' -e 's#^User=rokh#User=daemon#' \
+    -e 's#^Group=rokh#Group=daemon#' -e 's#^WorkingDirectory=.*#WorkingDirectory=/#' "$unit" > "$tmpu/rokh.service"
+  out="$(systemd-analyze verify "$tmpu/rokh.service" 2>&1)"
+  if [ -z "$out" ]; then ok "systemd-analyze verify (paths substituted)"; else bad "systemd-analyze verify: $out"; fi
+  rm -f "$tmpu/rokh.service" && rmdir "$tmpu"
+else
+  echo "SKIP  systemd-analyze not available"
+fi
+
+echo "== no secrets in templates"
+check "env templates hold placeholders only" sh -c "! grep -hE '^[A-Z_]*(PASSWORD|SECRET|PRIVATE)[A-Z_]*=.+' '$env_prod' '$env_mig' '$env_ops' '$env_pg' | grep -vE '=(CHANGE_ME)?$'"
+check "database URLs use CHANGE_ME passwords" sh -c "! grep -hEo 'postgres://[^:]+:[^@]*@' '$env_prod' '$env_mig' | grep -v ':CHANGE_ME@'"
+check "APP_SECRET_KEY and VAPID_PRIVATE_KEY are empty" sh -c "grep -qx 'APP_SECRET_KEY=' '$env_prod' && grep -qx 'VAPID_PRIVATE_KEY=' '$env_prod'"
+
+echo "== compose"
+if docker compose version > /dev/null 2>&1; then
+  tmpe="$(mktemp)"
+  cp "$env_pg" "$tmpe"
+  check "docker compose config is valid" env ROKH_PG_ENV_FILE="$tmpe" docker compose -f "$compose" config --quiet
+  rm -f "$tmpe"
+else
+  echo "SKIP  docker compose not available"
+fi
+check "compose uses PostgreSQL 16" grep -q 'postgres:16' "$compose"
+check "compose has a health check" grep -q 'healthcheck:' "$compose"
+check "compose restarts the container" grep -q 'restart: unless-stopped' "$compose"
+check "compose caps container logs" grep -q 'max-size:' "$compose"
+
+echo
+if [ "$fails" -eq 0 ]; then echo "template checks ok"; else echo "$fails template check(s) failed"; exit 1; fi
+ "$readme"
+check "cron MAILTO line has no trailing comment" sh -c "! grep -E '^MAILTO=' '$readme' | grep -Eq '[[:space:]]#|#'"
 check "monitoring section names both scripts" sh -c "sed -n '/^## 11\./,/^## 12\./p' '$readme' | grep -q backup-cron.sh && sed -n '/^## 11\./,/^## 12\./p' '$readme' | grep -q backup-status.sh"
 check "backup.sh is not scheduled directly anywhere" sh -c "! grep -rEq '^[0-9*][0-9*,/ -]* .*/backup\.sh' '$d' '$repo/docs'"
 
