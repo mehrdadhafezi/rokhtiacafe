@@ -37,6 +37,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/ratelimit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/users"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/web"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -49,6 +50,8 @@ commands:
   migrate up       apply pending migrations (uses MIGRATION_DATABASE_URL)
   migrate status   list migrations and whether they are applied
   check            verify app-enforced data invariants (read-only, uses DATABASE_URL)
+  config check     validate the configuration, embedded frontend, upload dir and database
+                   connection without starting the server (secrets are never printed)
   secret gen       print a new random APP_SECRET_KEY
   vapid gen        print a new VAPID key pair for Web Push (put both in the server .env)
   user create      create a staff account; password is read from stdin
@@ -87,6 +90,11 @@ func run(args []string, stdout io.Writer) error {
 		return runMigrate(ctx, args[1], stdout)
 	case "check":
 		return runCheck(ctx, stdout)
+	case "config":
+		if len(args) != 2 || args[1] != "check" {
+			return errors.New("usage: rokh config check")
+		}
+		return runConfigCheck(ctx, stdout)
 	case "secret":
 		if len(args) != 2 || args[1] != "gen" {
 			return errors.New("usage: rokh secret gen")
@@ -179,12 +187,20 @@ func serve(ctx context.Context) error {
 		Push:           pushSvc,
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	})
+	static := httpx.NewStatic(web.UI(), time.Now())
+	if !static.Ready() {
+		if cfg.IsProduction() {
+			return errors.New("no frontend embedded: build with scripts/build-release (production needs /menu and /admin/)")
+		}
+		logger.Warn("no frontend embedded: serving the API only (use the Vite dev server for the UI)")
+	}
 	handler := httpx.NewRouter(httpx.Deps{
 		Logger:     logger,
 		DB:         readiness{q: queries},
 		Production: cfg.IsProduction(),
 		API:        apiHandler.Handler(),
 		Media:      images.MediaHandler(),
+		Static:     static,
 	})
 	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
 	go expireOrders(ctx, orderSvc, logger)
@@ -434,4 +450,65 @@ func cleanupNotifications(ctx context.Context, pool *pgxpool.Pool, logger *slog.
 		case <-t.C:
 		}
 	}
+}
+
+// runConfigCheck is the deployment preflight: everything `serve` needs, checked read-only.
+func runConfigCheck(ctx context.Context, stdout io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("invalid configuration:\n%w", err)
+	}
+	var problems []string
+	line := func(k, v string) { fmt.Fprintf(stdout, "  %-16s %s\n", k, v) }
+	fmt.Fprintln(stdout, "configuration: ok")
+	line("environment", cfg.AppEnv)
+	line("listen", cfg.HTTPAddr)
+	line("public origin", cfg.AppOrigin)
+	line("trusted proxies", fmt.Sprint(cfg.TrustedProxies))
+	line("ordering hours", cfg.Ordering.Opens()+"-"+cfg.Ordering.Closes())
+	line("web push", map[bool]string{true: "enabled", false: "disabled (no VAPID keys)"}[cfg.PushEnabled()])
+
+	if httpx.NewStatic(web.UI(), time.Now()).Ready() {
+		line("frontend", "embedded (/menu, /admin/)")
+	} else {
+		line("frontend", "NOT embedded")
+		problems = append(problems, "frontend not embedded: build with scripts/build-release")
+	}
+
+	if st, err := os.Stat(cfg.UploadDir); err != nil || !st.IsDir() {
+		line("upload dir", cfg.UploadDir+" (missing)")
+		problems = append(problems, "UPLOAD_DIR does not exist: create it for the app user")
+	} else if f, err := os.CreateTemp(cfg.UploadDir, ".rokh-write-test-*"); err != nil {
+		line("upload dir", cfg.UploadDir+" (not writable)")
+		problems = append(problems, "UPLOAD_DIR is not writable by this user")
+	} else {
+		f.Close()
+		os.Remove(f.Name())
+		line("upload dir", cfg.UploadDir+" (writable)")
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pool, err := database.Open(pctx, cfg.DatabaseURL)
+	if err != nil {
+		line("database", "unreachable")
+		problems = append(problems, "database: "+err.Error())
+	} else {
+		defer pool.Close()
+		var user, version string
+		if err := pool.QueryRow(pctx, "SELECT current_user, current_setting('server_version')").Scan(&user, &version); err != nil {
+			problems = append(problems, "database query failed: "+err.Error())
+		} else {
+			line("database", fmt.Sprintf("reachable as %s (PostgreSQL %s)", user, version))
+		}
+	}
+
+	if len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintln(stdout, "problem:", p)
+		}
+		return fmt.Errorf("%d problem(s) found", len(problems))
+	}
+	fmt.Fprintln(stdout, "ready to serve")
+	return nil
 }

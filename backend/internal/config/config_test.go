@@ -33,10 +33,20 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-func TestProductionRequiresSecureCookies(t *testing.T) {
+// setProduction sets a complete, valid production configuration.
+func setProduction(t *testing.T) {
+	t.Helper()
 	clearEnv(t)
-	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://rokh_app@localhost/rokhtiacafe")
+	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir")
+	t.Setenv("APP_SECRET_KEY", NewSecret())
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1")
+	t.Setenv("UPLOAD_DIR", "/home/rokh/rokh/uploads")
+}
+
+func TestProductionRequiresSecureCookies(t *testing.T) {
+	setProduction(t)
 	t.Setenv("APP_BASE_URL", "http://rokh.tiacafe.ir")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
 		t.Fatalf("expected https/secure error, got %v", err)
@@ -70,11 +80,7 @@ func TestTrustedProxies(t *testing.T) {
 }
 
 func TestLoadProductionUsesJSONLogs(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("DATABASE_URL", "postgres://x@localhost/db")
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("APP_BASE_URL", "https://rokh.tiacafe.ir")
-	t.Setenv("APP_SECRET_KEY", NewSecret())
+	setProduction(t)
 
 	c, err := Load()
 	if err != nil {
@@ -144,7 +150,7 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"APP_ENV", "HTTP_ADDR", "DATABASE_URL", "LOG_LEVEL", "LOG_FORMAT", "APP_TIMEZONE", "SHUTDOWN_TIMEOUT",
 		"APP_BASE_URL", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_AGE", "TRUSTED_PROXIES", "UPLOAD_DIR", "ORDERING_HOURS",
-		"ORDER_PENDING_TTL", "ORDER_MAX_PENDING", "ORDER_MAX_PENDING_PER_CLIENT", "APP_SECRET_KEY",
+		"ORDER_PENDING_TTL", "ORDER_MAX_PENDING", "ORDER_MAX_PENDING_PER_CLIENT", "APP_SECRET_KEY", "MIGRATION_DATABASE_URL",
 		"VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "PUSH_HOST_ALLOWLIST"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
@@ -214,5 +220,46 @@ func TestPushConfig(t *testing.T) {
 	t.Setenv("VAPID_PRIVATE_KEY", "not-a-key")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VAPID_PRIVATE_KEY") {
 		t.Errorf("malformed private key: %v", err)
+	}
+}
+
+func TestProductionDeploymentRules(t *testing.T) {
+	setProduction(t)
+	if _, err := Load(); err != nil {
+		t.Fatalf("valid production config rejected: %v", err)
+	}
+	cases := []struct{ key, value, want string }{
+		{"HTTP_ADDR", "0.0.0.0:8080", "loopback"},
+		{"HTTP_ADDR", "62.204.61.18:8080", "loopback"},
+		{"TRUSTED_PROXIES", "", "TRUSTED_PROXIES"},
+		{"UPLOAD_DIR", "./data/uploads", "UPLOAD_DIR"},
+		{"DATABASE_URL", "postgres://postgres@localhost/rokhtiacafe", "app role"},
+		{"DATABASE_URL", "postgres://rokh_owner@localhost/rokhtiacafe", "app role"},
+	}
+	for _, c := range cases {
+		setProduction(t)
+		t.Setenv(c.key, c.value)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s=%q: want error mentioning %q, got %v", c.key, c.value, c.want, err)
+		}
+	}
+	// The owner role named in MIGRATION_DATABASE_URL is refused at runtime too.
+	setProduction(t)
+	t.Setenv("MIGRATION_DATABASE_URL", "postgres://cafe_owner@localhost/rokhtiacafe")
+	t.Setenv("DATABASE_URL", "postgres://cafe_owner@localhost/rokhtiacafe")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "app role") {
+		t.Errorf("owner role as runtime user: %v", err)
+	}
+	setProduction(t)
+	t.Setenv("HTTP_ADDR", "localhost:8080")
+	if _, err := Load(); err != nil {
+		t.Errorf("localhost must be accepted: %v", err)
+	}
+	// Development keeps its permissive defaults.
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://postgres@localhost/db")
+	t.Setenv("HTTP_ADDR", "0.0.0.0:8080")
+	if _, err := Load(); err != nil {
+		t.Errorf("development must not apply production rules: %v", err)
 	}
 }

@@ -70,3 +70,9 @@ desktop.ini
 
 # --- Claude Code local settings ---
 .claude/settings.local.json
+
+# --- Release build ---
+# frontend/dist is copied here by scripts/build-release.* and embedded into the binary.
+/backend/web/ui/*
+!/backend/web/ui/.gitkeep
+/release/

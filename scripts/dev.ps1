@@ -8,11 +8,12 @@
   ./scripts/dev.ps1 check     # gofmt + vet + tests (incl. PostgreSQL integration) + sqlc diff
   ./scripts/dev.ps1 fe-dev    # frontend dev server on http://127.0.0.1:5173 (proxies /api to :8080)
   ./scripts/dev.ps1 fe-check  # frontend typecheck + lint + tests + build + PWA check (same as CI)
+  ./scripts/dev.ps1 release   # release/rokh-linux-amd64: frontend embedded, reproducible (same as CI)
 #>
 param(
     [Parameter(Position = 0)]
     [ValidateSet('setup', 'db-up', 'db-down', 'db-reset', 'migrate', 'status', 'run', 'build', 'fmt', 'vet', 'test', 'sqlc', 'sqlc-diff', 'smoke', 'check',
-        'fe-install', 'fe-dev', 'fe-test', 'fe-build', 'fe-check', 'help')]
+        'fe-install', 'fe-dev', 'fe-test', 'fe-build', 'fe-check', 'release', 'help')]
     [string]$Command = 'help'
 )
 
@@ -96,6 +97,11 @@ switch ($Command) {
     'sqlc'      { Sqlc 'generate' }
     'sqlc-diff' { Sqlc 'diff' }
     'smoke'     { Smoke }
+    'release'   {
+        # Same script as CI (Git Bash on Windows): frontend build embedded in a Linux amd64 binary.
+        if (-not (Get-Command bash -ErrorAction SilentlyContinue)) { throw 'bash (Git for Windows) is required for the release build' }
+        Invoke-Step 'release build' { bash (Join-Path $Root 'scripts/build-release.sh') }
+    }
     'check' {
         Ensure-Env
         In-Backend {

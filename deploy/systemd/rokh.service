@@ -1,0 +1,32 @@
+# VPS option (deploy/README.md §5). Install as /etc/systemd/system/rokh.service, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rokh
+# Assumes a dedicated user "rokh" with the layout in /home/rokh/rokh.
+[Unit]
+Description=Rokh Tia Cafe (rokh serve)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=rokh
+Group=rokh
+WorkingDirectory=/home/rokh/rokh
+ExecStart=/home/rokh/rokh/bin/rokh serve
+# Graceful: SIGTERM, requests drain within SHUTDOWN_TIMEOUT (15 s).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+
+# Hardening: the process only needs its uploads directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/rokh/rokh/uploads
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
