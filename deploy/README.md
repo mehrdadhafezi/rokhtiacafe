@@ -247,7 +247,8 @@ Schedule backups **only through `backup-cron.sh`**, never `backup.sh` in a pipel
 look like a success. Root's crontab (`crontab -e` as root):
 
 ```
-MAILTO=owner@example.com            # the owner's real address: every alert is mailed here
+# Replace with the real address that receives backup alerts.
+MAILTO=owner@example.com
 30 3 * * * /opt/rokh/scripts/backup-cron.sh
 0  9 * * * /opt/rokh/scripts/backup-status.sh
 ```
