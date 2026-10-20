@@ -158,23 +158,22 @@ as separate bundles; the customer bundle never loads admin code.
 Order status colors: PENDING=warning, PREPARING=primary, READY=success, COMPLETED=muted, CANCELLED=danger — always paired with a text label, never color alone.
 RTL: use logical utilities only (`ms-/me-/ps-/pe-/start-/end-`); numbers rendered with `fa-IR` digits.
 
-## 4. Deployment architecture (pending server inspection)
+## 4. Deployment architecture
 
-Target is the existing cPanel/CloudLinux host. The app needs: a persistent process,
-a reverse proxy from `rokh.tiacafe.ir` to `127.0.0.1:<port>`, PostgreSQL >= 16 with two roles,
-and outbound HTTPS to push services. These are **not guaranteed** on shared hosting, so the
-read-only feasibility assessment (T0) runs **before** implementation (review F14); see
-[IMPLEMENTATION-PLAN.md §3](IMPLEMENTATION-PLAN.md#3-hosting-feasibility-assessment-t0).
+Target (decision D1, [HOSTING-ASSESSMENT.md](HOSTING-ASSESSMENT.md)): the existing cPanel/WHM
+server (AlmaLinux 8, LiteSpeed) behind the MizbanCloud CDN. MizbanCloud edge → LiteSpeed
+(domain-specific userdata include) → `rokh serve` on `127.0.0.1:18080` under systemd as user
+`rokh` → dedicated PostgreSQL 16 in Docker on `127.0.0.1:15432`. Production stays NO-GO until the
+release gate in HOSTING-ASSESSMENT §6 is approved.
 
 Build artifact: `rokh` Linux amd64 static binary with embedded SPA + migrations.
-Runtime layout (proposal):
+Runtime layout ([deploy/README.md §2](../deploy/README.md#2-server-layout)):
 ```
-~/rokh/
-  bin/rokh, bin/rokh.prev        # rollback = swap and restart
-  .env                           # 0600, not in git (runtime: DATABASE_URL as rokh_app)
-  .env.migrate                   # 0600, MIGRATION_DATABASE_URL as rokh_owner; only for `rokh migrate`
-  uploads/                       # product images (outside public_html)
-  backups/                       # pg_dump + uploads tarballs, 14-day retention, copied off-server
+/opt/rokh/bin/rokh, rokh.prev    # rollback = swap and restart
+/etc/rokh/rokh.env               # root:rokh 0640 (runtime: DATABASE_URL as rokh_app)
+/etc/rokh/migrate.env            # root 0600, MIGRATION_DATABASE_URL as rokh_owner; only for migrate/backup/restore
+/var/lib/rokh/uploads/           # product images (outside any web root)
+/backup/rokh/rokh-<stamp>/       # verified pg_dump + uploads sets, 14 days / ≥ 7 sets, copied off-server
 ```
 Deploy procedure (manual, owner-approved): backup → upload binary → `rokh migrate up`
 (as `rokh_owner`) → restart (as `rokh_app`) → health check → `rokh check` → keep previous binary. Migrations are forward-only and

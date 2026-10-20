@@ -1,8 +1,9 @@
-# VPS option (deploy/README.md §4): Caddy obtains and renews the TLS certificate and proxies to
-# rokh on loopback. Set TRUSTED_PROXIES=127.0.0.1 in ~/rokh/.env.
+# Fallback only: a separate VPS for rokh.tiacafe.ir (docs/HOSTING-ASSESSMENT.md, decision D1).
+# Not used on the cPanel/LiteSpeed host, which uses deploy/litespeed/ instead. Caddy obtains and
+# renews the TLS certificate and proxies to rokh on loopback (TRUSTED_PROXIES=127.0.0.1).
 rokh.tiacafe.ir {
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy 127.0.0.1:18080
 	request_body {
 		# Largest request: product image upload (3 MB) plus multipart overhead.
 		max_size 4MB

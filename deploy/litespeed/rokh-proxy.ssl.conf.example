@@ -1,0 +1,32 @@
+# cPanel userdata include for the HTTPS virtual host of rokh.tiacafe.ir ONLY (deploy/README.md §5).
+# Installs at (CPUSER = the cPanel account that owns rokh.tiacafe.ir; create the directory):
+#   /etc/apache2/conf.d/userdata/ssl/2_4/CPUSER/rokh.tiacafe.ir/rokh-proxy.conf
+# Then, with owner approval: /scripts/ensure_vhost_includes --user=CPUSER, and a LiteSpeed graceful
+# restart (WHM → LiteSpeed Web Server → Graceful Restart). No global Apache or LiteSpeed file changes.
+#
+# Same mechanism (Apache ProxyPass in a userdata include, read by LiteSpeed) that already works for
+# another domain on this server. What LiteSpeed honours from this file must still be confirmed
+# during the approved deployment: see the verification list in deploy/README.md §5.3.
+
+# The vhost's own document root keeps serving ACME/AutoSSL and DCV challenges.
+ProxyPass "/.well-known/" "!"
+
+# Everything else goes to rokh on loopback (HTTP_ADDR=127.0.0.1:18080 in /etc/rokh/rokh.env).
+# timeout: longer than rokh's 30 s write timeout so rokh, not the proxy, ends slow requests.
+ProxyPreserveHost On
+ProxyRequests Off
+ProxyPass "/" "http://127.0.0.1:18080/" timeout=60
+ProxyPassReverse "/" "http://127.0.0.1:18080/"
+
+# Do not forward the CDN's alternative client-IP headers: rokh ignores them, and dropping them
+# makes sure no later component trusts a value an attacker can send straight to the origin.
+# Client IP selection uses X-Forwarded-For only (docs/SECURITY.md §5.1).
+<IfModule mod_headers.c>
+    RequestHeader unset MC_REAL_IP
+    RequestHeader unset X-Real-IP
+</IfModule>
+
+# Request body: product images are at most 3 MB (rokh enforces 3 MB + 64 KB multipart overhead and
+# answers 413 itself). Keep LiteSpeed's own "Max Request Body Size" at its default (larger).
+# Security headers (CSP, HSTS, nosniff, frame-ancestors) are set by rokh; do not add, remove or
+# override them here.

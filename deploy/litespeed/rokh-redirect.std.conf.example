@@ -1,0 +1,11 @@
+# cPanel userdata include for the plain-HTTP (port 80) virtual host of rokh.tiacafe.ir ONLY.
+# Installs at:
+#   /etc/apache2/conf.d/userdata/std/2_4/CPUSER/rokh.tiacafe.ir/rokh-redirect.conf
+# Plain HTTP is never proxied to rokh: everything except /.well-known/ is redirected to HTTPS, so
+# session cookies (Secure) and the app only ever travel over TLS. /.well-known/ stays on the
+# document root so AutoSSL / Let's Encrypt HTTP validation keeps working.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\.well-known/
+    RewriteRule ^ https://rokh.tiacafe.ir%{REQUEST_URI} [R=301,L]
+</IfModule>
