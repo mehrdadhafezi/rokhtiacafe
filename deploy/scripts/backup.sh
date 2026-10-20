@@ -58,10 +58,6 @@ case $upload_dir in /*) ;; *) die "UPLOAD_DIR in $ROKH_ENV_FILE must be an absol
 exec 9> "$backup_dir/.rokh-backup.lock"
 flock -n 9 || die "another backup is running (lock $backup_dir/.rokh-backup.lock)"
 
-for stale in "$backup_dir"/.rokh-*.partial; do
-  [ -e "$stale" ] && log "warning: unfinished set from an interrupted run: $stale (inspect, then remove by hand)"
-done
-
 # --- Backup -------------------------------------------------------------------------------------
 EXIT_FAIL=2
 stamp="$(date +%Y%m%d-%H%M%S)"
@@ -118,23 +114,44 @@ published=yes
 sync
 log "backup ok: $final ($(du -sh "$final" | cut -f1), ${upload_files} upload files)"
 
-# --- Retention: only complete Rokh sets, never the newest KEEP_MIN --------------------------------
+# --- Retention -----------------------------------------------------------------------------------
+# Candidates are directories (not symlinks) directly in BACKUP_DIR named exactly rokh-YYYYmmdd-HHMMSS.
+# A set is "complete" when it holds exactly db.dump, uploads.tar.gz, INFO and SHA256SUMS as regular
+# files and nothing else. Only complete sets count towards KEEP_MIN, and only complete sets older
+# than KEEP_DAYS beyond the newest KEEP_MIN are removed. Incomplete sets, sets with extra files,
+# interrupted .partial runs and every other name are never touched; they are reported (exit 3).
+# These local sets do not replace the off-site copies (deploy/README.md §8.3).
 EXIT_FAIL=3
+status=0
+complete() { # complete DIR — exactly the four expected regular files
+  local d=$1 f
+  for f in db.dump uploads.tar.gz INFO SHA256SUMS; do
+    [ -f "$d/$f" ] && [ ! -L "$d/$f" ] || return 1
+  done
+  [ -z "$(find "$d" -mindepth 1 \( ! -type f -o \( ! -name db.dump ! -name uploads.tar.gz ! -name INFO ! -name SHA256SUMS \) \) -print -quit)" ]
+}
+for stale in "$backup_dir"/.rokh-*.partial; do
+  [ -e "$stale" ] || continue
+  log "warning: unfinished set from an interrupted run kept: $stale (inspect, then remove by hand)"
+  status=3
+done
 cutoff="$(date -d "-$keep_days days" +%Y%m%d-%H%M%S)"
 mapfile -t sets < <(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -name 'rokh-*' -printf '%f\n' |
   grep -E '^rokh-[0-9]{8}-[0-9]{6}$' | sort -r)
-status=0
-for i in "${!sets[@]}"; do
-  s="${sets[$i]}"
-  [ "$i" -ge "$keep_min" ] || continue
-  [[ ${s#rokh-} < $cutoff ]] || continue
+kept=0
+for s in "${sets[@]}"; do
   d="$backup_dir/$s"
-  if [ -n "$(find "$d" -mindepth 1 \( ! -type f -o \( ! -name db.dump ! -name uploads.tar.gz ! -name INFO ! -name SHA256SUMS \) \) -print -quit)" ]; then
-    log "warning: retention kept $s: it contains unexpected files (inspect by hand)"
+  if ! complete "$d"; then
+    log "warning: retention kept $s: not a complete set (missing or unexpected files; inspect by hand)"
     status=3
     continue
   fi
+  if [ "$kept" -lt "$keep_min" ] || ! [[ ${s#rokh-} < $cutoff ]]; then
+    kept=$((kept + 1))
+    continue
+  fi
   rm -f -- "$d/db.dump" "$d/uploads.tar.gz" "$d/INFO" "$d/SHA256SUMS"
-  rmdir -- "$d" && log "retention: removed $s" || status=3
+  if rmdir -- "$d"; then log "retention: removed $s"; else status=3; fi
 done
+log "retention: $kept complete set(s) kept locally (keep at least $keep_min, $keep_days days)"
 exit "$status"

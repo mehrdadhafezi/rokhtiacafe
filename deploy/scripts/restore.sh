@@ -81,11 +81,14 @@ done
 
 live_uploads="$(env_get "$ROKH_ENV_FILE" UPLOAD_DIR)"
 if [ -n "$uploads_dest" ]; then
-  case $uploads_dest in /*) ;; *) die "RESTORE_UPLOADS_DIR must be an absolute path" ;; esac
+  [[ $uploads_dest =~ ^/[A-Za-z0-9._/-]+$ ]] || die "RESTORE_UPLOADS_DIR must be an absolute path of [A-Za-z0-9._/-]"
   uploads_dest="${uploads_dest%/}"
+  uploads_partial="$uploads_dest.partial"
   [ "$uploads_dest" != "${live_uploads%/}" ] || die "RESTORE_UPLOADS_DIR is the live UPLOAD_DIR"
   [ ! -e "$uploads_dest" ] && [ ! -L "$uploads_dest" ] ||
     die "RESTORE_UPLOADS_DIR already exists: $uploads_dest (choose a new path; existing files are never replaced)"
+  [ ! -e "$uploads_partial" ] && [ ! -L "$uploads_partial" ] ||
+    die "$uploads_partial exists (left by a failed restore): inspect it, see deploy/README.md §9.4"
   [ -d "$(dirname -- "$uploads_dest")" ] || die "parent of RESTORE_UPLOADS_DIR does not exist"
   [ -f "$set_dir/uploads.tar.gz" ] || die "RESTORE_UPLOADS_DIR is set but the set has no uploads.tar.gz"
 fi
@@ -108,34 +111,74 @@ app_connect="$(q "SELECT has_database_privilege('$APP_USER', current_database(),
 [ "$app_connect" = t ] || die "$APP_USER cannot connect to $target: run restore-target.sql to prepare it"
 
 # --- 3. Restore and verify ------------------------------------------------------------------------
+# The target carries its own status as a database comment, so a partly restored database can never
+# be mistaken for a validated recovery: IN PROGRESS → VALIDATED, or FAILED (set on any exit before
+# validation). Only VALIDATED databases may be switched to (deploy/README.md §9.3).
 EXIT_FAIL=2
-log "restore $(basename -- "$set_dir") into $target ($PG_CLIENT client)"
+set_name="$(basename -- "$set_dir")"
+mark() { # mark TEXT — set the target's status comment (TEXT is built from validated values only)
+  q "COMMENT ON DATABASE $target IS 'rokh restore $1 (set $set_name, $(date -u +%Y-%m-%dT%H:%M:%SZ))'" > /dev/null
+}
+step="start"
+validated=no
+on_exit() {
+  local code=$?
+  cleanup
+  if [ "$validated" != yes ] && [ "$step" != start ]; then
+    mark "FAILED at $step: NOT a validated recovery, drop it (deploy/README.md 9.4)" 2> /dev/null ||
+      echo "warning: could not mark $target as FAILED" >&2
+    echo "RESTORE FAILED at step '$step': database $target is NOT a validated recovery." >&2
+    [ -z "${uploads_partial:-}" ] || [ ! -e "$uploads_partial" ] ||
+      echo "Partial uploads were left in $uploads_partial (never used; see deploy/README.md §9.4)." >&2
+  fi
+  exit "$code"
+}
+trap on_exit EXIT
+
+mark "IN PROGRESS: NOT a validated recovery" || die "cannot mark $target (comment as $OWN_USER)"
+step="pg_restore"
+log "restore $set_name into $target ($PG_CLIENT client)"
 pg_exec "$OWN_USER" "$OWN_PASS" "$target" "$OWN_HOST" "$OWN_PORT" "$OWN_SSLMODE" -- \
   pg_restore --no-password --no-owner --role="$OWN_USER" --exit-on-error --single-transaction \
   --dbname="$target" < "$set_dir/db.dump" ||
-  die "pg_restore failed; the transaction was rolled back and $target is still empty"
+  die "pg_restore failed; the transaction was rolled back, so $target holds no restored data"
 
 target_owner_url="$(url_with_db "$owner_url" "$target")"
 target_app_url="$(url_with_db "$app_url" "$target")"
+step="migrate up"
 MIGRATION_DATABASE_URL="$target_owner_url" rokh_cmd migrate up || die "rokh migrate up failed on $target"
+step="migrate status"
 status="$(MIGRATION_DATABASE_URL="$target_owner_url" rokh_cmd migrate status)" || die "rokh migrate status failed"
 grep -q ', 0 pending$' <<< "$status" || die "migrations still pending on $target"
+step="rokh check"
 DATABASE_URL="$target_app_url" rokh_cmd check || die "rokh check found invariant violations in $target"
 
+step="row counts"
 log "row counts in $target:"
 q "SELECT format('  %-22s %s', table_name, (xpath('/row/c/text()',
      query_to_xml(format('SELECT count(*) AS c FROM rokh.%I', table_name), false, true, '')))[1])
-   FROM information_schema.tables WHERE table_schema = 'rokh' AND table_type = 'BASE TABLE' ORDER BY table_name"
+   FROM information_schema.tables WHERE table_schema = 'rokh' AND table_type = 'BASE TABLE' ORDER BY table_name" ||
+  die "could not count rows in $target"
 
+uploads_note="database only"
 if [ -n "$archive" ]; then
-  mkdir -m 750 -- "$uploads_dest"
-  tar -xzf "$archive" -C "$uploads_dest" --no-same-owner --no-same-permissions --no-overwrite-dir ||
-    die "unpacking uploads failed (partial files are in $uploads_dest)"
+  # Unpack beside the destination and rename only when complete: a visible RESTORE_UPLOADS_DIR is
+  # always a full copy. A failure leaves the .partial directory for inspection; nothing is deleted.
+  step="uploads"
+  mkdir -m 750 -- "$uploads_partial" || die "cannot create $uploads_partial"
+  tar -xzf "$archive" -C "$uploads_partial" --no-same-owner --no-same-permissions --no-overwrite-dir ||
+    die "unpacking uploads failed"
   if [ -n "$ROKH_RUN_AS" ] && [ "$(id -u)" = 0 ]; then
-    chown -R -- "$ROKH_RUN_AS:" "$uploads_dest"
+    chown -R -- "$ROKH_RUN_AS:" "$uploads_partial" || die "cannot chown the restored uploads"
   fi
+  mv -T -- "$uploads_partial" "$uploads_dest" || die "cannot move $uploads_partial into place"
   log "uploads unpacked into $uploads_dest"
+  uploads_note="uploads in $uploads_dest"
 elif [ -f "$set_dir/uploads.tar.gz" ]; then
   log "uploads not restored (set RESTORE_UPLOADS_DIR to unpack them)"
 fi
-log "restore ok into database $target. To switch over, follow deploy/README.md §9.3 (owner approval)."
+
+step="mark validated"
+mark "VALIDATED: 0 pending migrations, rokh check ok, $uploads_note" || die "cannot mark $target as validated"
+validated=yes
+log "RESTORE VALIDATED into database $target. To switch over, follow deploy/README.md §9.3 (owner approval)."

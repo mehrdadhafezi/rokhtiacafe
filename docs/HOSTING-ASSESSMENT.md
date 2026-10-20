@@ -38,7 +38,7 @@ to the push services) that were never run.
 | P2 | `rokh` as a systemd service (`deploy/systemd/rokh.service`), dedicated system user `rokh`, layout under `/opt/rokh`, `/etc/rokh`, `/var/lib/rokh`. | Supervised restarts, hardening, no cPanel-account coupling. |
 | P3 | PostgreSQL 16 in its own Docker Compose project (`rokh`), published on `127.0.0.1:15432` only, roles `rokh_owner` / `rokh_app` from the shared `roles.sql`. | Dedicated instance (F9); no public port; same role model as CI. |
 | P4 | LiteSpeed reaches rokh through two domain-specific userdata includes (`deploy/litespeed/`); plain HTTP only redirects. | No global configuration changes (F4). |
-| P5 | Start with `TRUSTED_PROXIES=127.0.0.1`. Add the MizbanCloud edge ranges only after R1 is verified. | Safe default: never trusts client-supplied headers; worst case is shared rate-limit buckets, not spoofing. |
+| P5 | Start with `TRUSTED_PROXIES=127.0.0.1`. Add the MizbanCloud edge ranges only after R1 is verified. | Smallest trust set, but spoof resistance depends on LiteSpeed appending the real peer (R1, unverified). Until measured, client IPs are not relied on for anything but loose rate limits. |
 | P6 | Backups as root to `/backup/rokh` (required mount), 14 days / at least 7 sets, plus encrypted off-site copies pulled by the owner. | Root disk nearly full (F8); Docker volumes are not in cPanel backups. |
 | P7 | The CDN must bypass caching for `/api/*`, `/admin/*` and HTML (cache only `/assets/*` and `/media/*`). | Mitigates R2 without an application change. |
 
@@ -46,15 +46,15 @@ to the push services) that were never run.
 
 | # | Risk | Impact | Status / mitigation |
 |---|---|---|---|
-| **R1** | **Client IP chain unverified.** Whether LiteSpeed appends to the CDN's `X-Forwarded-For` or replaces it, and the official MizbanCloud edge IP ranges, are unknown. | With loopback-only trust, every visitor behind one edge shares a rate-limit bucket (orders 30/10 min, login 20/15 min per IP) — busy hours could hit `429`. If LiteSpeed replaced the header, trusting the edges would make everyone `127.0.0.1`. | **Blocker for go-live** until measured (deploy/README.md §5.3) and `TRUSTED_PROXIES` decided. If LiteSpeed does not append, the fix needs either a LiteSpeed trusted-IP change for the edge ranges (global, owner/host decision) or a separately approved app change (read a configured header); neither is part of T14. |
+| **R1** | **Client IP chain unverified.** Whether LiteSpeed appends the real peer to the end of the same `X-Forwarded-For` line, replaces it, passes it through, or adds a second line; and the official MizbanCloud edge IP ranges. rokh reads only the first header line and trusts its right-most untrusted entry (tested in Go, including UNSAFE cases). | If LiteSpeed appends correctly: visitors behind one edge share a rate-limit bucket (orders 30/10 min, login 20/15 min per IP), busy hours could hit `429`. If it passes the header through or uses a second line: visitors (and direct-to-origin requests) choose their own address and evade per-IP limits. If it replaces the header, trusting the edges makes everyone `127.0.0.1`. | **Blocker for go-live** until measured (deploy/README.md §5.3) and `TRUSTED_PROXIES` decided. If LiteSpeed does not append, the fix needs either a LiteSpeed trusted-IP change for the edge ranges (global, owner/host decision) or a separately approved app change (read a configured header); neither is part of T14. |
 | **R2** | **CDN caching of API responses.** Most `/api/v1` responses have no `Cache-Control`; order tracking uses one URL for all customers (token in a header). | A CDN rule that caches them would serve one user's data to another. | **Blocker** until the CDN bypass rule (P7) is confirmed with `Mc-Cache-Status` on `/api/v1/public/order`, `/api/v1/admin/*` and `/admin/`. Recommended follow-up (needs approval, out of T14 scope): default `Cache-Control: no-store` for `/api/v1` responses in the app. |
 | R3 | Direct-to-origin requests bypass the CDN (and its WAF). | Rate limits still see the attacker's own IP (F11, tested); only the CDN's filtering is skipped. | Accept, or restrict origin 443 to MizbanCloud ranges in the firewall (affects other sites: owner/host decision). |
-| R4 | Root disk ~90 % used. | Docker image, volume growth, journal and Docker logs could fill it and stop every site on the server. | Docker log rotation in the template; backups on `/backup`; monthly checks (README §11); gate item G1. |
+| **R4** | **Root disk ~90 % used, shared with other production sites.** | Docker image, volume growth, journal and Docker logs (Rokh's and everyone else's) could fill it and stop every site on the server. | **Blocker:** at today's usage G1 fails (§6.1 target ≤ 85 %). The host or owner must free or add space first. Docker log rotation in the template; backups on `/backup`; daily/monthly checks (README §11). |
 | R5 | LiteSpeed support for `ProxyPreserveHost`, `ProxyPass … !`, `timeout=` and `RequestHeader unset` in userdata includes, and include persistence after cPanel rebuilds, is unconfirmed. | Wrong Host, broken ACME renewals, cut-off uploads. | Verify in the approved window (README §5.3). |
 | R6 | Docker iptables rules vs the host firewall (e.g. CSF restarts). | Lost loopback port mapping → `readyz` 503. | Check after firewall restarts; README §4.1. |
 | R7 | CDN → origin TLS mode (full/strict) not confirmed in the MizbanCloud panel. | Plain-HTTP or unverified hop between CDN and origin. | Gate item G2. |
 | R8 | Outbound HTTPS to push services not tested from the server (Phase D6). | Push alerts may not arrive (the dashboard list still works). | Test during the approved window; push may stay disabled. |
-| R9 | Backups live on the same server until copied. | Server loss loses them. | Off-site procedure (README §8.3) is manual; owner must schedule it. |
+| R9 | Local backup sets live on the same server as the data. | Server loss, compromise or a root mistake loses data and every local set together; local retention is **not** off-site protection. | Off-site procedure (README §8.3) is manual; the owner must name a person and schedule (G8). |
 | R10 | In-memory rate limits and kill switch reset on restart (O4, O6). | Known, accepted. | Re-apply kill switch after restarts. |
 | R11 | `rokh` loads `./.env` and `../.env` from its working directory. | A stray file could add settings. | Layout avoids it; `preflight.sh` checks `/.env`. Not changed in code (out of scope). |
 
@@ -65,7 +65,8 @@ to the push services) that were never run.
 3. R1 and R2 resolved, or explicitly accepted by the owner in writing.
 4. MizbanCloud: cache bypass rule for `/api/*`, `/admin/*`, HTML; TLS mode full/strict; upload
    limit ≥ 4 MB; origin timeout ≥ 30 s.
-5. Free: port `127.0.0.1:18080` and `127.0.0.1:15432`; ≥ 5 GB on `/` after installation.
+5. Free ports `127.0.0.1:18080` and `127.0.0.1:15432`; disk capacity accepted under §6.1 (the
+   5 GB figure there is only a technical lower bound for Rokh, not an approval threshold).
 6. Docker Engine and Compose v2 on the server (owner/host confirms; installing them is a server
    change needing approval).
 7. An off-site destination and an encryption key for backups (owner).
@@ -86,6 +87,8 @@ Each of these is a separate, explicit approval in chat; none is implied by mergi
 | Firewall changes (only if R3 is to be mitigated) | Whole server | §3 R3 |
 | Root cron entry for backups | Server | README §8.1 |
 | Restore into production, or any restore rehearsal on the server | Database, uploads | README §9 |
+| Dropping rehearsal or failed restore targets and their upload directories | Database, filesystem | README §9.4 |
+| Running `capacity-report.sh` for the G1 baseline | Server (read-only) | §6.1 |
 | Upgrades and rollbacks | Service, database | README §10 |
 
 ## 6. Release gate (Go/No-Go)
@@ -95,21 +98,56 @@ Production is **NO-GO** until every line is checked with evidence and the owner 
 
 | # | Gate | Go when | Evidence |
 |---|---|---|---|
-| G1 | Main disk capacity | ≥ 5 GB free on `/` after install; `/backup` mounted with ≥ 50 GB free | `df -h / /backup` |
+| G1 | Main disk capacity | §6.1 acceptance signed: baseline recorded, projection within target, host confirmation in writing | capacity reports, host reply |
 | G2 | Origin TLS | Origin certificate valid for `rokh.tiacafe.ir`, auto-renewing; CDN → origin in full/strict mode | cert details; MizbanCloud panel |
 | G3 | CDN and trusted client IP | R1 measured; `TRUSTED_PROXIES` decided; two different visitors get different rate-limit buckets; `/api/*`, `/admin/*`, HTML show `Mc-Cache-Status` ≠ `HIT` | README §5.3, §7 |
 | G4 | Reverse proxy | Includes active only for `rokh.tiacafe.ir`; `/.well-known/` served from docroot; HTTP → HTTPS redirect; 3 MB upload works; security headers present once; other sites unaffected | curl output |
 | G5 | Go service | `systemctl is-active rokh`; survives `systemctl restart`; graceful stop logs `server stopped`; restarts after `kill -9`; runs as `rokh` | journal |
 | G6 | PostgreSQL roles and privileges | Port bound to 127.0.0.1 only; `rokh_app` cannot DELETE financial tables or run DDL; neither role superuser/CREATEDB/CREATEROLE | `preflight.sh`, psql |
 | G7 | Migration status | `migrate.sh status` shows `0 pending`; `rokh check` ok | output |
-| G8 | Backup verification | `backup.sh` exit 0 on the server; set verified with `sha256sum -c`; cron entry active; one off-site encrypted copy made | log |
-| G9 | Restore rehearsal | Restore of the server's own backup into a `*_restore_*` database: exit 0, row counts match | `restore.sh` output |
+| G8 | Backup verification | `backup.sh` exit 0 on the server; set verified with `sha256sum -c`; cron entry active; an encrypted off-site copy made **and verified**, with a named person and schedule (local sets alone never satisfy G8) | log |
+| G9 | Restore rehearsal | Restore of the server's own backup (once from an off-site copy) into a `*_restore_*` database: `RESTORE VALIDATED`, marker `VALIDATED`, row counts match | `restore.sh` output |
 | G10 | Rollback rehearsal | Binary rollback (`rokh.prev`) and proxy include rollback performed once | notes |
 | G11 | Application smoke tests | `/healthz`, `/readyz`, `/menu` 200, `/admin/` login, place and complete a test order, image upload | notes |
 | G12 | Browser and mobile acceptance | docs/ACCEPTANCE.md on a real phone (Android Chrome, iOS Safari) at 375/390 px; Persian RTL, Jalali dates, tomans | screenshots |
 | G13 | Monitoring and handover | Daily/monthly checks (README §11) assigned; owner knows restart, rollback and restore steps; credentials stored by the owner only | sign-off |
 
 Owner decision: ☐ GO ☐ NO-GO — name, date: ______________________
+
+### 6.1 Disk-capacity acceptance (G1)
+
+The root filesystem is shared with other production applications, so "enough space for Rokh" is
+not the question; the question is whether the server stays healthy for everyone after Rokh is
+added. There is no single fixed number that approves it.
+
+**Technical lower bound (not an approval threshold).** Rokh alone needs roughly: PostgreSQL image
+~0.5 GB, binary and scripts < 50 MB, database < 1 GB in year 1, Docker log cap 30 MB, product
+images < 0.5 GB, journal share small (bounded by the server's journald limits). With margin for
+image updates (old and new image side by side during a pull), **≥ 5 GB free on `/` after
+installation is the minimum below which installation is technically unsafe.** Meeting it does
+not mean the server has capacity.
+
+**Acceptance process (all required; evidence redacted):**
+1. **Baseline.** Run `deploy/scripts/capacity-report.sh` (read-only) daily for at least 7 days
+   before installation, with owner approval. Record `/` and `/backup` used/free, inodes, journal
+   and Docker usage.
+2. **Growth rate.** From the baseline, compute the root filesystem's growth per day caused by the
+   existing sites (worst day and average).
+3. **Projection.** Projected `/` usage after 90 days = today's usage + Rokh's lower-bound
+   footprint + 90 × the worst-day growth.
+4. **Targets.** Go only if all hold, using the host's own limits where they are stricter:
+   - projected usage after 90 days ≤ **85 %** of `/`, and
+   - at least 30 days of headroom above the host's alert threshold at the worst observed growth,
+     and
+   - free space after installation ≥ the 5 GB lower bound.
+5. **Host confirmation.** The host confirms in writing that adding Rokh (Docker image, volume,
+   service) is acceptable at the projected usage and states its alert/stop thresholds.
+6. **Monitoring commitment.** After go-live, someone named in G13 checks `df -h /` daily; at
+   85 % the owner and host are told; at 90 % Rokh upgrades stop until space is freed.
+
+**Today:** `/` is ~90 % used, which already exceeds the 85 % target before Rokh is added.
+**G1 fails and production stays NO-GO** until the host or owner frees or adds space and the
+process above is completed.
 
 ## 7. T14 validation record
 

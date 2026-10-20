@@ -19,8 +19,9 @@ ProxyPass "/" "http://127.0.0.1:18080/" timeout=60
 ProxyPassReverse "/" "http://127.0.0.1:18080/"
 
 # Do not forward the CDN's alternative client-IP headers: rokh ignores them, and dropping them
-# makes sure no later component trusts a value an attacker can send straight to the origin.
-# Client IP selection uses X-Forwarded-For only (docs/SECURITY.md §5.1).
+# keeps any later component from trusting a value an attacker can send straight to the origin.
+# This include does NOT sanitize X-Forwarded-For: rokh relies on LiteSpeed appending the real peer
+# to it, which is unverified on this server (deploy/README.md §5.3, docs/SECURITY.md §5.1).
 <IfModule mod_headers.c>
     RequestHeader unset MC_REAL_IP
     RequestHeader unset X-Real-IP

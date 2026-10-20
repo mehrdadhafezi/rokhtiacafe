@@ -312,6 +312,39 @@ third_set="$(newest)"
 check "KEEP_MIN: the three newest sets remain" test -d "$BK/$third_set" -a -d "$BK/$second_set" -a -d "$BK/$first_set"
 check "KEEP_MIN: an older set beyond KEEP_DAYS was removed" test ! -e "$BK/$recent"
 
+echo "== retention: incomplete sets, interrupted runs, unrelated content"
+mkset rokh-20210101-030000
+mkset rokh-20210102-030000
+for n in 1 2 3; do # newest by name, but incomplete: they must not count towards KEEP_MIN
+  mkdir -m 700 "$BK/rokh-2099010$n-000000"
+  echo partial > "$BK/rokh-2099010$n-000000/db.dump"
+done
+mkdir -m 700 "$BK/.rokh-20200101-000000.partial" && echo x > "$BK/.rokh-20200101-000000.partial/db.dump"
+mkdir -p "$T/victim" && for f in db.dump uploads.tar.gz INFO SHA256SUMS; do echo victim > "$T/victim/$f"; done
+ln -s "$T/victim" "$BK/rokh-20200102-030000"
+if [ -n "${TEST_BACKUP_MOUNT:-}" ]; then
+  mkdir -p "$TEST_BACKUP_MOUNT/other-app/rokh-20200101-030000"
+  for f in db.dump uploads.tar.gz INFO SHA256SUMS; do echo other > "$TEST_BACKUP_MOUNT/other-app/rokh-20200101-030000/$f"; done
+  echo other > "$TEST_BACKUP_MOUNT/rokh-20200101-030000.dump"
+fi
+sleep 1
+expect 3 "retention with KEEP_MIN=7 reports incomplete sets and partials" bk_ops BACKUP_KEEP_DAYS=1 BACKUP_KEEP_MIN=7
+out_has "incomplete set is reported" 'rokh-20990103-000000: not a complete set'
+out_has "interrupted run is reported" 'interrupted run kept: .*\.rokh-20200101-000000\.partial'
+check "incomplete sets do not count towards KEEP_MIN (old complete sets kept)" test -d "$BK/rokh-20210101-030000" -a -d "$BK/rokh-20210102-030000"
+check "incomplete sets are never deleted" test -f "$BK/rokh-20990101-000000/db.dump" -a -f "$BK/rokh-20990103-000000/db.dump"
+check "interrupted .partial run is never deleted" test -f "$BK/.rokh-20200101-000000.partial/db.dump"
+check "a symlink named like a set is ignored" test -L "$BK/rokh-20200102-030000" -a "$(cat "$T/victim/db.dump")" = victim
+sleep 1
+expect 3 "retention with KEEP_MIN=6 removes only the oldest complete set" bk_ops BACKUP_KEEP_DAYS=1 BACKUP_KEEP_MIN=6
+check "oldest complete set removed, the next one kept" test ! -e "$BK/rokh-20210101-030000" -a -d "$BK/rokh-20210102-030000"
+check "symlink target untouched" test -f "$T/victim/db.dump" -a -f "$T/victim/SHA256SUMS"
+if [ -n "${TEST_BACKUP_MOUNT:-}" ]; then
+  check "unrelated content on the backup mount untouched" test -f "$TEST_BACKUP_MOUNT/other-app/rokh-20200101-030000/db.dump" -a -f "$TEST_BACKUP_MOUNT/rokh-20200101-030000.dump"
+else
+  echo "SKIP  unrelated content outside BACKUP_DIR (no separate backup mount)"
+fi
+
 echo "== restore"
 R1=rokhtiacafe_restore_t1
 R2=rokhtiacafe_restore_t2
@@ -332,6 +365,9 @@ check "rokh_app is still DML-only on orders" test "$(admin_sql "$R1" "SELECT has
 check "protective triggers restored" test "$(admin_sql "$R1" "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'rokh.orders'::regclass")" = "$(admin_sql "$LIVE_DB" "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'rokh.orders'::regclass")"
 check "uploads restored identically (minus temp files)" diff -r -x '.upload-*' "$T/var/uploads/products" "$UPL/products"
 check "upload temp files were not restored" test ! -e "$UPL/products/.upload-123"
+db_comment() { admin_sql postgres "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = '$1'"; }
+check "validated restore is marked VALIDATED" sh -c "printf '%s' \"$(db_comment "$R1")\" | grep -q '^rokh restore VALIDATED: 0 pending migrations, rokh check ok, uploads in '"
+check "no .partial uploads directory left" test ! -e "$UPL.partial"
 check "live uploads untouched" test -f "$T/var/uploads/products/.upload-123"
 if [ -n "$RUN_AS" ]; then check "restored uploads belong to $RUN_AS" test "$(stat -c %U "$UPL/products")" = "$RUN_AS"; fi
 
@@ -396,8 +432,53 @@ expect 1 "restore refuses the live UPLOAD_DIR" env RESTORE_DB="$R2" RESTORE_UPLO
 expect 1 "restore refuses a relative RESTORE_UPLOADS_DIR" env RESTORE_DB="$R2" RESTORE_UPLOADS_DIR=uploads.new "$scripts/restore.sh" "$SET"
 check "refused restores left $R2 empty" test "$(admin_sql "$R2" "SELECT count(*) FROM pg_namespace WHERE nspname = 'rokh'")" = 0
 check "live database unchanged by the restore tests" test "$(counts "$LIVE_DB")" = "$(counts "$R1")"
+echo "== restore failures after pg_restore"
+# A wrapper binary fails one rokh subcommand; everything else runs the real binary.
+failbin() { # failbin NAME SUBCOMMAND — prints the path of an ops file whose ROKH_BIN fails SUBCOMMAND
+  printf '#!/bin/sh
+if [ "$1" = "%s" ] && [ "${2:-}" != status ]; then echo "simulated failure" >&2; exit 1; fi
+exec "%s" "$@"
+' "$2" "$BIN" > "$T/bin/rokh-$1"
+  chmod 755 "$T/bin/rokh-$1"
+  sed "s#^ROKH_BIN=.*#ROKH_BIN=$T/bin/rokh-$1#" "$T/etc/ops.env" > "$T/etc/ops.$1"
+  echo "$T/etc/ops.$1"
+}
+failed_restore() { # failed_restore NAME DB OPSFILE [extra env...] — expect exit 2 and a FAILED marker
+  local name=$1 db=$2 ops=$3
+  shift 3
+  admin_file postgres "$scripts/restore-target.sql" -v db_name="$db" > /dev/null
+  expect 2 "restore fails when $name" env ROKH_OPS_ENV="$ops" RESTORE_DB="$db" RESTORE_UPLOADS_DIR="$T/var/up-$db" "$@" "$scripts/restore.sh" "$SET"
+  out_has "failure says it is not a validated recovery" 'NOT a validated recovery'
+  check "$db is marked FAILED" sh -c "printf '%s' \"$(db_comment "$db")\" | grep -q '^rokh restore FAILED at '"
+  check "no uploads directory published for $db" test ! -e "$T/var/up-$db"
+  expect 1 "a retry into the failed target $db is refused" env RESTORE_DB="$db" "$scripts/restore.sh" "$SET"
+}
+failed_restore "migrate up fails" rokhtiacafe_restore_f1 "$(failbin migrate migrate)"
+failed_restore "rokh check fails" rokhtiacafe_restore_f2 "$(failbin check check)"
+check "the failed check left data behind, clearly marked" test "$(admin_sql rokhtiacafe_restore_f2 'SELECT count(*) FROM rokh.categories')" = 2
+if [ "$PG_CLIENT" = host ]; then
+  mkdir -p "$T/failtar"
+  printf '#!/bin/sh
+case " $* " in *" -xzf "*) echo "simulated tar failure" >&2; exit 2;; esac
+exec "%s" "$@"
+' "$(command -v tar)" > "$T/failtar/tar"
+  chmod 755 "$T/failtar/tar"
+  failed_restore "unpacking uploads fails" rokhtiacafe_restore_f3 "$T/etc/ops.env" PATH="$T/failtar:$PATH"
+  check "failed unpack left only the .partial directory" test -d "$T/var/up-rokhtiacafe_restore_f3.partial"
+  expect 1 "a new restore refuses while the .partial directory exists" env RESTORE_DB="$R2" RESTORE_UPLOADS_DIR="$T/var/up-rokhtiacafe_restore_f3" "$scripts/restore.sh" "$SET"
+else
+  echo "SKIP  unpack failure (needs a tar shim on the host PATH)"
+fi
+check "live uploads untouched by failed restores" test -f "$T/var/uploads/products/.upload-123" -a "$(ls "$T/var/uploads/products" | wc -l)" = 2
+
 expect 0 "database-only restore (no RESTORE_UPLOADS_DIR)" env RESTORE_DB="$R2" "$scripts/restore.sh" "$SET"
 out_has "uploads skip is reported" 'uploads not restored'
+
+echo "== capacity report"
+before="$(find "$BK" "$T/var" | sort | md5sum)"
+expect 0 "capacity-report.sh runs" "$scripts/capacity-report.sh"
+out_has "capacity report shows the root filesystem" '^/ +mount /'
+check "capacity report changed nothing" test "$(find "$BK" "$T/var" | sort | md5sum)" = "$before"
 
 echo "== secrets"
 check "passwords never in tool arguments" sh -c "[ ! -f '$T/out/argv.log' ] || ! grep -Fq -e '$OWNER_PW' -e '$APP_PW' '$T/out/argv.log'"

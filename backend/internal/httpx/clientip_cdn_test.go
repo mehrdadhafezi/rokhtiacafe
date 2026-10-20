@@ -50,3 +50,53 @@ func TestClientIPBehindCDN(t *testing.T) {
 		}
 	}
 }
+
+// TestClientIPUpstreamFailureModes pins down what rokh does when the proxy in front of it does
+// NOT sanitize or append correctly. These cases pass because they assert today's behaviour, and
+// several of them are spoofable: they are why production client-IP handling stays blocked until
+// LiteSpeed's forwarding is measured (docs/HOSTING-ASSESSMENT.md R1). rokh can only be as
+// trustworthy as the header it is handed by a trusted peer.
+func TestClientIPUpstreamFailureModes(t *testing.T) {
+	loopbackOnly := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	withEdges := append([]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, loopbackOnly...)
+	const forged, edge = "198.51.100.77", "192.0.2.10"
+
+	cases := []struct {
+		name    string
+		trusted []netip.Prefix
+		lines   []string // X-Forwarded-For header lines as received by rokh, in order
+		want    string
+	}{
+		// SPOOFABLE: the proxy forwards the visitor's header verbatim and appends nothing.
+		{"UNSAFE: proxy passes a forged header through unchanged", loopbackOnly, []string{forged}, forged},
+		// SPOOFABLE: a direct-to-origin request forges a trusted edge entry; the proxy appends nothing.
+		{"UNSAFE: forged edge entry, nothing appended", withEdges, []string{forged + ", " + edge}, forged},
+		// SPOOFABLE: the proxy adds its peer as a second header line instead of appending to the
+		// first. rokh reads only the first line (Header.Get), which the visitor controls.
+		{"UNSAFE: real peer in a second header line is ignored", loopbackOnly, []string{forged, "203.0.113.5"}, forged},
+		// Not spoofable, but collapses visitors: a malformed right-most entry stops the walk.
+		{"malformed right-most entry falls back to the peer", loopbackOnly, []string{forged + ", garbage"}, "127.0.0.1"},
+		{"empty entry falls back to the peer", loopbackOnly, []string{forged + ", "}, "127.0.0.1"},
+		{"entry with a port is read as its address", loopbackOnly, []string{"198.51.100.20:4444"}, "198.51.100.20"},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = "127.0.0.1:40000"
+		for _, l := range c.lines {
+			r.Header.Add("X-Forwarded-For", l)
+		}
+		if got := ClientIP(r, c.trusted).String(); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
+	}
+
+	// A peer that is not trusted is never overridden, whatever it sends: the only unconditional
+	// guarantee rokh gives on its own.
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "203.0.113.9:5000"
+	r.Header.Set("X-Forwarded-For", forged)
+	r.Header.Set("X-Real-IP", forged)
+	if got := ClientIP(r, loopbackOnly).String(); got != "203.0.113.9" {
+		t.Errorf("untrusted peer: got %s, want 203.0.113.9", got)
+	}
+}

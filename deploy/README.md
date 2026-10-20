@@ -76,9 +76,11 @@ Add `--pty` instead of `--pipe` for interactive commands (`user create` asks for
 
 ## 3. First installation (owner-approved, in this order)
 
-1. **Capacity.** The root disk is ~90 % used (~22 GB free). Confirm at least 5 GB stays free
-   after pulling the PostgreSQL image and allowing for database growth. Backups go to `/backup`,
-   never to the root disk.
+1. **Capacity (gate G1).** The root disk is ~90 % used (~22 GB free) and shared with other
+   production sites. Installation starts only after the disk-capacity acceptance in
+   [HOSTING-ASSESSMENT.md §6.1](../docs/HOSTING-ASSESSMENT.md#61-disk-capacity-acceptance-g1) is
+   signed off (baseline with `scripts/capacity-report.sh`, host confirmation). Backups go to
+   `/backup`, never to the root disk.
 2. **System user and directories:**
    ```sh
    useradd --system --home-dir /var/lib/rokh --shell /sbin/nologin rokh
@@ -184,9 +186,17 @@ edited.
 - **Directives honoured.** LiteSpeed honours `ProxyPreserveHost`, `ProxyPass … !` and `timeout=`
   for this vhost. A 3 MB upload works through CDN → LiteSpeed → rokh, and a 25-second request is
   not cut off.
-- **Forwarding headers** (risk R1). Record what LiteSpeed sends to rokh in `X-Forwarded-For`, for
-  a request through the CDN and for one sent straight to the origin. Compare with the visitor's
-  real IP, then decide `TRUSTED_PROXIES` (docs/SECURITY.md §5.1).
+- **Forwarding headers** (risk R1). Capture the `X-Forwarded-For` header *lines* that reach rokh
+  (e.g. a one-off loopback listener in place of rokh during the window) for:
+  1. a normal request through the CDN, from a phone whose public IP you know;
+  2. the same request with a forged `X-Forwarded-For: 198.51.100.77` added by the client;
+  3. a request sent straight to the origin (`curl --resolve rokh.tiacafe.ir:443:62.204.61.18`)
+     with a forged `X-Forwarded-For: 198.51.100.77, <an edge IP>`.
+
+  Go only if, in every case, there is a single header line whose **right-most** entry is the
+  address LiteSpeed actually saw (the edge in 1–2, your own IP in 3) and the forged value is never
+  right-most. Then decide `TRUSTED_PROXIES` (docs/SECURITY.md §5.1). Anything else (pass-through,
+  a second line, replacement) keeps client-IP handling blocked; see R1 for the options.
 - **Security headers intact.** `Strict-Transport-Security`, `Content-Security-Policy` and
   `X-Frame-Options` reach the browser exactly once: no duplicates or removals by LiteSpeed or the
   CDN.
@@ -259,15 +269,26 @@ has passed.
 
 ### 8.2 Retention
 
-- Only directories named exactly `rokh-YYYYmmdd-HHMMSS` in `BACKUP_DIR` are candidates.
-- The newest `BACKUP_KEEP_MIN` (7) are always kept.
-- Older sets past `BACKUP_KEEP_DAYS` (14) are removed only if they contain nothing but the four
-  known files. Otherwise they are kept and reported (exit 3).
-- Other files and directories, including other applications' backups, are never touched.
-- Retention runs only after a successful backup.
+- Only real directories (not symlinks) directly in `BACKUP_DIR`, named exactly
+  `rokh-YYYYmmdd-HHMMSS`, are candidates.
+- A set is **complete** when it holds exactly `db.dump`, `uploads.tar.gz`, `INFO` and
+  `SHA256SUMS` as regular files. Only complete sets count towards `BACKUP_KEEP_MIN` (7), so
+  broken or partial sets can never push good ones out.
+- Complete sets beyond the newest `BACKUP_KEEP_MIN` and older than `BACKUP_KEEP_DAYS` (14) are
+  removed.
+- Incomplete sets, sets with extra files and `.partial` directories from interrupted runs are
+  **never** removed; they are reported and the run exits 3 so the log shows it.
+- Nothing else in `BACKUP_DIR`, and nothing outside it (other applications' backups elsewhere on
+  `/backup`), is ever touched. Retention runs only after a successful backup.
 
 Docker volumes are **not** covered by cPanel/JetBackup account backups: these sets are the only
 database backups.
+
+**Local sets are not a backup strategy on their own.** `/backup` is a disk in the same server:
+a server loss, compromise, ransomware or a mistaken command as root can take the live data and
+every local set together. Local retention only gives quick restores of recent days; protection
+against losing the server comes **only** from the off-site copies in §8.3. Without a recent,
+verified off-site copy, gate G8 is not met.
 
 ### 8.3 Off-site copy (required)
 
@@ -310,10 +331,19 @@ Rehearse a restore (§9) from an off-site copy at least once a quarter.
    - `rokh check` as the app role, then prints row counts;
    - finally, unpacks the uploads into the new directory.
 
-   Exit 1 means refused (nothing changed); exit 2 means a step failed.
-3. **Compare and clean up.** Compare the printed row counts with the live database. Once done,
-   remove the rehearsal database by hand (an owner decision; the scripts never drop anything):
-   `docker exec -u postgres rokh-postgres dropdb rokhtiacafe_restore_20261020`.
+   Exit 1 means refused (nothing changed). Exit 2 means a step failed.
+
+   **Status marker.** The target database carries its status as a comment: `rokh restore IN
+   PROGRESS` while running, then either `rokh restore VALIDATED: …` (only after migrations,
+   `rokh check` and the uploads all succeeded, printed as `RESTORE VALIDATED`) or `rokh restore
+   FAILED at <step>: NOT a validated recovery`. If `pg_restore` fails, its single transaction
+   leaves no restored data; if a later step fails, the data stays but is marked FAILED and the run
+   says `RESTORE FAILED`. Uploads are unpacked into `<RESTORE_UPLOADS_DIR>.partial` and renamed to
+   `RESTORE_UPLOADS_DIR` only on success, so that directory exists only for a complete copy.
+   Read the marker with:
+   `docker exec -u postgres rokh-postgres psql -XAtc "SELECT datname, shobj_description(oid, 'pg_database') FROM pg_database WHERE datname LIKE '%\_restore\_%'"`
+3. **Compare and clean up.** Compare the printed row counts with the live database, then remove
+   the rehearsal database (§9.4).
 
 ### 9.2 Restore from an off-site copy
 
@@ -322,12 +352,32 @@ Decrypt and verify the copy on the PC (`sha256sum -c SHA256SUMS`), copy the set 
 
 ### 9.3 Switching production to a restored database (owner decision; loses newer orders)
 
+0. Confirm the marker (§9.1) of the database you switch to starts with `rokh restore VALIDATED`.
+   Never switch to one marked `IN PROGRESS` or `FAILED`, or without a marker.
 1. `systemctl stop rokh`.
 2. In `/etc/rokh/rokh.env` and `/etc/rokh/migrate.env`, change only the database name to the
    restored one.
 3. Uploads: `mv /var/lib/rokh/uploads /var/lib/rokh/uploads.before-restore-$(date +%F)`, then
    `mv /var/lib/rokh/uploads.restore-… /var/lib/rokh/uploads` (renames only; nothing is deleted).
 4. `preflight.sh`, `systemctl start rokh`, then verify (§7).
+
+### 9.4 Cleaning up rehearsal and failed restore targets
+
+The scripts never drop or delete anything; cleanup is a manual, owner-approved step. For each
+database to remove:
+1. Its name contains `_restore_` and it is **not** the name in `DATABASE_URL` or
+   `MIGRATION_DATABASE_URL` (`grep -h DATABASE_URL= /etc/rokh/rokh.env /etc/rokh/migrate.env`).
+2. Its marker (§9.1) is `FAILED`, `IN PROGRESS` (from a run that is no longer running), or a
+   `VALIDATED` rehearsal you have finished with.
+3. Nothing is connected to it:
+   `docker exec -u postgres rokh-postgres psql -XAtc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'NAME'"` prints 0.
+4. Then: `docker exec -u postgres rokh-postgres dropdb NAME` (without `--force`).
+
+For uploads: only directories named `/var/lib/rokh/uploads.restore-*` or
+`…uploads.restore-*.partial` that are not the live `UPLOAD_DIR` (check with
+`grep UPLOAD_DIR= /etc/rokh/rokh.env` and `readlink -f`) may be removed, with
+`rm -r -- /var/lib/rokh/uploads.restore-YYYYMMDD.partial` after a look at their contents. Never
+use wildcards in the `rm` command, and never touch `/var/lib/rokh/uploads` itself.
 
 ## 10. Upgrade and rollback
 

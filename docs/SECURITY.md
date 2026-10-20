@@ -80,20 +80,32 @@ Production chain: visitor → MizbanCloud edge → LiteSpeed on the origin → r
 rokh's direct peer is always LiteSpeed on loopback. The CDN edge addresses are *not* the proxy
 identity rokh sees; they can only appear inside `X-Forwarded-For`.
 
-- **Selection** (`internal/httpx/clientip.go`): only when the peer is in `TRUSTED_PROXIES`, walk
-  `X-Forwarded-For` from the right and take the first address that is not itself trusted, stopping
-  at the first malformed entry. Entries a visitor writes themselves end up left of the entries
-  appended by the CDN and LiteSpeed, so they are never selected.
+- **Selection** (`internal/httpx/clientip.go`, tested): only when the peer is in `TRUSTED_PROXIES`,
+  walk the **first** `X-Forwarded-For` header line from the right and take the first address that
+  is not itself trusted, stopping at the first malformed entry (then the peer is used). A peer that
+  is not trusted is never overridden; that is the only guarantee rokh gives on its own.
+- **What rokh cannot check:** whether the right-most entry really is the address the trusted
+  proxy saw. Visitor-written entries are ignored *only if* LiteSpeed (and the CDN) append the real
+  peer to the end of that same header line. If the proxy passes the visitor's header through
+  unchanged, or puts the real peer in a second header line, the visitor chooses their own address
+  (`TestClientIPUpstreamFailureModes`, cases marked UNSAFE). LiteSpeed's actual behaviour on this
+  server is **not verified**.
 - **Ignored headers:** rokh never reads `MC_REAL_IP` or `X-Real-IP` (both sent by MizbanCloud),
   and the LiteSpeed include removes them before proxying.
-- **Default:** `TRUSTED_PROXIES=127.0.0.1`. It is safe against spoofing; the cost is that the
-  visible client is the edge address, so visitors behind one edge share a bucket.
+- **Default:** `TRUSTED_PROXIES=127.0.0.1`. This does **not** by itself make the client IP
+  spoof-resistant: it means rokh trusts whatever LiteSpeed puts at the end of the header. If
+  LiteSpeed appends correctly, the visible client is the edge address (visitors behind one edge
+  share a bucket); if it does not, the address is visitor-controlled. Rate limits are abuse
+  controls only (§5), so the impact is weaker limits, not an authorisation bypass; still,
+  production client-IP handling is blocked until measured.
 - **Adding the edge ranges** to `TRUSTED_PROXIES` is correct only if LiteSpeed *appends* the edge
   address to the header it receives. If it replaces the header, every visitor collapses to
   `127.0.0.1`. Measure this before go-live (docs/HOSTING-ASSESSMENT.md, risk R1).
-- **Direct-to-origin requests** (bypassing the CDN): LiteSpeed appends the real peer, which is
-  untrusted, so it is selected even when the request forges edge addresses
-  (`clientip_cdn_test.go`).
+- **Direct-to-origin requests** (bypassing the CDN): *if* LiteSpeed appends the real peer, that
+  untrusted address is selected even when the request forges edge addresses
+  (`TestClientIPBehindCDN`); if it does not append, the forged value wins (UNSAFE cases).
+- **Possible later hardening** (needs a separately approved code change, not in T14): read all
+  `X-Forwarded-For` lines, or a single header that the proxy overwrites with the real peer.
 - **Caching:** the CDN must not cache `/api/*`, `/admin/*` or HTML (risk R2). Order tracking
   (`GET /public/order`, token in a header) sends `no-store`.
 
