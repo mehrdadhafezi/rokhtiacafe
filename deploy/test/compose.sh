@@ -22,7 +22,9 @@ chmod 600 "$tmp/postgres.env"
 native() { if command -v cygpath > /dev/null; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 command -v cygpath > /dev/null && export MSYS_NO_PATHCONV=1 # Git Bash on Windows
 export ROKH_PG_CONTAINER="rokh-$id-pg" ROKH_PG_VOLUME="rokh-$id-pgdata" ROKH_PG_NETWORK="rokh-$id-net" \
-  ROKH_PG_PORT="$port" ROKH_PG_ENV_FILE="$(native "$tmp/postgres.env")"
+  ROKH_PG_PORT="$port"
+ROKH_PG_ENV_FILE="$(native "$tmp/postgres.env")"
+export ROKH_PG_ENV_FILE
 dc() { docker compose -p "rokh-$id" -f "$(native "$tmp/compose.yaml")" "$@"; }
 cleanup() {
   dc down --volumes --timeout 30 > /dev/null 2>&1 || true
@@ -45,6 +47,7 @@ check "compose: restart policy unless-stopped" '[ "$(docker inspect -f "{{.HostC
 check "compose: dedicated network only" '[ "$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}} {{end}}" "$ROKH_PG_CONTAINER")" = "$ROKH_PG_NETWORK " ]'
 check "compose: log rotation configured" '[ "$(docker inspect -f "{{index .HostConfig.LogConfig.Config \"max-size\"}}" "$ROKH_PG_CONTAINER")" = 10m ]'
 check "compose: database owned by rokh_owner" '[ "$(q "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()")" = rokh_owner ]'
+# shellcheck disable=SC2034 # used inside the eval below
 roles_sql="SELECT count(*) FILTER (WHERE NOT (rolsuper OR rolcreatedb OR rolcreaterole)) || '/' || count(*)
            FROM pg_roles WHERE rolname IN ('rokh_owner', 'rokh_app')"
 check "compose: roles are not superuser, createdb or createrole" '[ "$(q "$roles_sql")" = 2/2 ]'

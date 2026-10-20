@@ -75,8 +75,8 @@ for k in NoNewPrivileges ProtectSystem ProtectHome PrivateTmp CapabilityBounding
 done
 if command -v systemd-analyze > /dev/null && [ -d /run/systemd/system ]; then
   tmpu="$(mktemp -d)"
-  sed -e 's#^ExecStart=.*#ExecStart=/bin/true#' -e '/^EnvironmentFile=/d' -e 's#^User=rokh#User=nobody#' \
-    -e 's#^Group=rokh#Group=nogroup#' -e 's#^WorkingDirectory=.*#WorkingDirectory=/#' "$unit" > "$tmpu/rokh.service"
+  sed -e 's#^ExecStart=.*#ExecStart=/bin/true#' -e '/^EnvironmentFile=/d' -e 's#^User=rokh#User=daemon#' \
+    -e 's#^Group=rokh#Group=daemon#' -e 's#^WorkingDirectory=.*#WorkingDirectory=/#' "$unit" > "$tmpu/rokh.service"
   out="$(systemd-analyze verify "$tmpu/rokh.service" 2>&1)"
   if [ -z "$out" ]; then ok "systemd-analyze verify (paths substituted)"; else bad "systemd-analyze verify: $out"; fi
   rm -f "$tmpu/rokh.service" && rmdir "$tmpu"

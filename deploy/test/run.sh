@@ -173,7 +173,7 @@ cfg_fail() { # cfg_fail NAME PATTERN KEY=VALUE — config check with one setting
   local name=$1 pat=$2 kv=$3
   (
     while IFS= read -r k; do unset "$k"; done < <(grep -Eo '^[A-Za-z_][A-Za-z0-9_]*=' "$T/etc/rokh.env" | tr -d =)
-    export "$kv"
+    export "${kv?}"
     . "$scripts/lib.sh"
     env_export_file "$T/etc/rokh.env"
     cd / && "$BIN" config check

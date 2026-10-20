@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for the ops scripts (backup, restore, migrate, preflight). Sourced, never run.
 #
 # Rules kept here so every script follows them:
@@ -65,6 +66,8 @@ load_ops() {
     [ -z "${ROKH_OPS_ENV:-}" ] || die "ROKH_OPS_ENV=$ROKH_OPS_ENV does not exist"
     OPS_FILE=""
   fi
+  # Used by the scripts that source this file.
+  # shellcheck disable=SC2034
   ROKH_BIN="$(opt ROKH_BIN /opt/rokh/bin/rokh)"
   ROKH_ENV_FILE="$(opt ROKH_ENV_FILE /etc/rokh/rokh.env)"
   ROKH_MIGRATE_ENV_FILE="$(opt ROKH_MIGRATE_ENV_FILE /etc/rokh/migrate.env)"

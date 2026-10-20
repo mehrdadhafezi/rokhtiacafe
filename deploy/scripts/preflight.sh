@@ -54,9 +54,7 @@ else
 fi
 
 # 3. rokh loads ./.env and ../.env from its working directory: none may exist where it runs.
-for f in /.env; do
-  if [ -e "$f" ]; then fail "stray $f would be loaded by rokh"; else pass "no stray $f"; fi
-done
+if [ -e /.env ]; then fail "stray /.env would be loaded by rokh"; else pass "no stray /.env"; fi
 
 # 4. rokh config check with exactly the service's settings (a clean environment).
 if out="$(
