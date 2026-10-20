@@ -89,6 +89,7 @@ Add `--pty` instead of `--pipe` for interactive commands (`user create` asks for
    install -d -o rokh -g rokh -m 750 /var/lib/rokh/uploads
    install -d -o root -g root -m 755 /etc/rokh
    install -d -o root -g root -m 700 /backup/rokh
+   install -d -o root -g root -m 700 /var/lib/rokh-backup   # backup run records (§8.1)
    ```
 3. **Settings.** Copy the four templates from `deploy/env/` to `/etc/rokh/` with the owners and
    modes from §2, then fill them in:
@@ -239,10 +240,45 @@ open `https://rokh.tiacafe.ir/menu` on a phone and log in at `/admin/`.
 
 ## 8. Backup
 
-### 8.1 What `backup.sh` does
+### 8.1 Scheduling and alerts
 
-Run it as root, daily, from root's crontab:
-`30 3 * * * /opt/rokh/scripts/backup.sh 2>&1 | logger -t rokh-backup`.
+Schedule backups **only through `backup-cron.sh`**, never `backup.sh` in a pipeline. cron runs
+`/bin/sh`, where `backup.sh | logger` reports `logger`'s exit status, so a failed backup would
+look like a success. Root's crontab (`crontab -e` as root):
+
+```
+MAILTO=owner@example.com            # the owner's real address: every alert is mailed here
+30 3 * * * /opt/rokh/scripts/backup-cron.sh
+0  9 * * * /opt/rokh/scripts/backup-status.sh
+```
+
+- **`backup-cron.sh`** runs `backup.sh` without a pipe, captures its real exit code and:
+  - records it in `/var/lib/rokh-backup/last-run` (`result=ok|refused|failed|retention-warning`,
+    `exit=`, start and finish times), and the finish time in `last-success` for exit 0 or 3;
+  - sends the output to the journal (`journalctl -t rokh-backup`): priority `err` unless the
+    exit code is 0;
+  - prints nothing on success (no mail), and an `ALERT` with the result, the next step and the
+    last lines of output for **any** other exit code, which cron mails to `MAILTO`;
+  - exits with `backup.sh`'s own code. Exit 4 means the run could not be recorded.
+- **`backup-status.sh`** is the fail-closed signal. It is silent with exit 0 only when the last
+  run succeeded **and** the last success is younger than `BACKUP_MAX_AGE_HOURS` (26). A missing
+  or unreadable record, a refused or failed run, a stale success (e.g. cron stopped, or the
+  wrapper never ran) all print an `ALERT` and exit 1; a retention warning prints a `WARNING` and
+  exits 3. Because it also alerts when nothing ran at all, a silent mail system is the only gap:
+  check it by hand (`backup-status.sh -v`) during the daily check (§11).
+- **Mail delivery must be proven** before G8: with owner approval, run
+  `BACKUP_MAX_AGE_HOURS=0 /opt/rokh/scripts/backup-status.sh` from cron once (it always alerts)
+  and confirm the mail arrives.
+
+| `backup.sh` exit | Meaning | Alert | Recorded success |
+|---|---|---|---|
+| 0 | backup ok | none | yes |
+| 1 | refused: precondition failed, nothing written | ALERT | no |
+| 2 | failed: nothing published | ALERT | no |
+| 3 | backup ok, retention kept something it could not remove | ALERT (mail), WARNING (status) | yes |
+| other / 4 | unexpected / could not record | ALERT | no |
+
+### 8.2 What `backup.sh` does
 
 Each run writes one set, `BACKUP_DIR/rokh-YYYYmmdd-HHMMSS/`:
 - `db.dump`: `pg_dump --format=custom` as the owner role, so schema, grants and default
@@ -267,7 +303,7 @@ has passed.
 
 **Exit 3** means the backup is fine, but retention kept a set it could not safely remove.
 
-### 8.2 Retention
+### 8.3 Retention
 
 - Only real directories (not symlinks) directly in `BACKUP_DIR`, named exactly
   `rokh-YYYYmmdd-HHMMSS`, are candidates.
@@ -287,10 +323,10 @@ database backups.
 **Local sets are not a backup strategy on their own.** `/backup` is a disk in the same server:
 a server loss, compromise, ransomware or a mistaken command as root can take the live data and
 every local set together. Local retention only gives quick restores of recent days; protection
-against losing the server comes **only** from the off-site copies in §8.3. Without a recent,
+against losing the server comes **only** from the off-site copies in §8.4. Without a recent,
 verified off-site copy, gate G8 is not met.
 
-### 8.3 Off-site copy (required)
+### 8.4 Off-site copy (required)
 
 The backup disk is inside the same server, so copy every set off it, encrypted at rest
 (docs/SECURITY.md §9), at least weekly and before every upgrade:
@@ -404,8 +440,12 @@ container (`docker compose stop`) without removing it or its volume, so nothing 
 
 ## 11. Monitoring and troubleshooting
 
-- **Daily:** the backup log (`journalctl -t rokh-backup`) ends with `backup ok`;
-  `systemctl is-active rokh`; `curl -fsS http://127.0.0.1:18080/readyz`.
+- **Automatic:** `backup-cron.sh` mails an `ALERT` for every backup exit other than 0, and
+  `backup-status.sh` mails one every morning while the last run failed or the last success is
+  older than 26 h (§8.1). Act on any mail the same day.
+- **Daily, by hand:** `/opt/rokh/scripts/backup-status.sh -v` prints `backup ok: last success …`
+  (anything else is an incident, even without a mail); `systemctl is-active rokh`;
+  `curl -fsS http://127.0.0.1:18080/readyz`. Details of a run: `journalctl -t rokh-backup -n 50`.
 - **Monthly:** `df -h / /backup`, `docker system df`, and the size of the newest `db.dump`.
 - **Logs.** Production logs are JSON lines with a request id. Passwords, tokens, cookies and push
   endpoints are never logged.

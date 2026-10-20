@@ -54,7 +54,7 @@ to the push services) that were never run.
 | R6 | Docker iptables rules vs the host firewall (e.g. CSF restarts). | Lost loopback port mapping → `readyz` 503. | Check after firewall restarts; README §4.1. |
 | R7 | CDN → origin TLS mode (full/strict) not confirmed in the MizbanCloud panel. | Plain-HTTP or unverified hop between CDN and origin. | Gate item G2. |
 | R8 | Outbound HTTPS to push services not tested from the server (Phase D6). | Push alerts may not arrive (the dashboard list still works). | Test during the approved window; push may stay disabled. |
-| R9 | Local backup sets live on the same server as the data. | Server loss, compromise or a root mistake loses data and every local set together; local retention is **not** off-site protection. | Off-site procedure (README §8.3) is manual; the owner must name a person and schedule (G8). |
+| R9 | Local backup sets live on the same server as the data. | Server loss, compromise or a root mistake loses data and every local set together; local retention is **not** off-site protection. | Off-site procedure (README §8.4) is manual; the owner must name a person and schedule (G8). |
 | R10 | In-memory rate limits and kill switch reset on restart (O4, O6). | Known, accepted. | Re-apply kill switch after restarts. |
 | R11 | `rokh` loads `./.env` and `../.env` from its working directory. | A stray file could add settings. | Layout avoids it; `preflight.sh` checks `/.env`. Not changed in code (out of scope). |
 
@@ -85,7 +85,7 @@ Each of these is a separate, explicit approval in chat; none is implied by mergi
 | Add the two LiteSpeed userdata includes; graceful restart | Web server shared with other sites | README §5.2 |
 | MizbanCloud cache/TLS/limit settings; any DNS change | CDN | §4 item 4 |
 | Firewall changes (only if R3 is to be mitigated) | Whole server | §3 R3 |
-| Root cron entry for backups | Server | README §8.1 |
+| Root crontab: `MAILTO`, `backup-cron.sh`, `backup-status.sh`; mail-delivery test | Server | README §8.1 |
 | Restore into production, or any restore rehearsal on the server | Database, uploads | README §9 |
 | Dropping rehearsal or failed restore targets and their upload directories | Database, filesystem | README §9.4 |
 | Running `capacity-report.sh` for the G1 baseline | Server (read-only) | §6.1 |
@@ -105,12 +105,12 @@ Production is **NO-GO** until every line is checked with evidence and the owner 
 | G5 | Go service | `systemctl is-active rokh`; survives `systemctl restart`; graceful stop logs `server stopped`; restarts after `kill -9`; runs as `rokh` | journal |
 | G6 | PostgreSQL roles and privileges | Port bound to 127.0.0.1 only; `rokh_app` cannot DELETE financial tables or run DDL; neither role superuser/CREATEDB/CREATEROLE | `preflight.sh`, psql |
 | G7 | Migration status | `migrate.sh status` shows `0 pending`; `rokh check` ok | output |
-| G8 | Backup verification | `backup.sh` exit 0 on the server; set verified with `sha256sum -c`; cron entry active; an encrypted off-site copy made **and verified**, with a named person and schedule (local sets alone never satisfy G8) | log |
+| G8 | Backup verification | `backup-cron.sh` exit 0 on the server and `backup-status.sh -v` ok; an alert mail proven to arrive; set verified with `sha256sum -c`; cron entry active; an encrypted off-site copy made **and verified**, with a named person and schedule (local sets alone never satisfy G8) | log |
 | G9 | Restore rehearsal | Restore of the server's own backup (once from an off-site copy) into a `*_restore_*` database: `RESTORE VALIDATED`, marker `VALIDATED`, row counts match | `restore.sh` output |
 | G10 | Rollback rehearsal | Binary rollback (`rokh.prev`) and proxy include rollback performed once | notes |
 | G11 | Application smoke tests | `/healthz`, `/readyz`, `/menu` 200, `/admin/` login, place and complete a test order, image upload | notes |
 | G12 | Browser and mobile acceptance | docs/ACCEPTANCE.md on a real phone (Android Chrome, iOS Safari) at 375/390 px; Persian RTL, Jalali dates, tomans | screenshots |
-| G13 | Monitoring and handover | Daily/monthly checks (README §11) assigned; owner knows restart, rollback and restore steps; credentials stored by the owner only | sign-off |
+| G13 | Monitoring and handover | Alert mails go to a monitored address; daily/monthly checks (README §11) assigned; owner knows restart, rollback and restore steps; credentials stored by the owner only | sign-off |
 
 Owner decision: ☐ GO ☐ NO-GO — name, date: ______________________
 

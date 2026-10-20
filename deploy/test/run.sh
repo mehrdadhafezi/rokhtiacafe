@@ -474,6 +474,94 @@ check "live uploads untouched by failed restores" test -f "$T/var/uploads/produc
 expect 0 "database-only restore (no RESTORE_UPLOADS_DIR)" env RESTORE_DB="$R2" "$scripts/restore.sh" "$SET"
 out_has "uploads skip is reported" 'uploads not restored'
 
+echo "== scheduled backup (cron wrapper, run by /bin/sh like cron)"
+SD="$T/backup-status"
+mkdir -m 700 "$SD" "$T/fake"
+printf '#!/bin/sh\n{ echo "ARGS $*"; while [ $# -gt 0 ]; do [ "$1" = -f ] && cat "$2"; shift; done; } >> "%s/logger.log"\n' "$T/out" > "$T/fake/logger"
+chmod 755 "$T/fake/logger"
+for c in 0 1 2 3 7; do
+  printf '#!/bin/sh\necho "fake backup output, exit %s"\nexit %s\n' "$c" "$c" > "$T/fake/backup-$c"
+  chmod 755 "$T/fake/backup-$c"
+done
+cron_ops() { # cron_ops COMMAND — ops file for the wrapper with a given backup command
+  sed -e '/^BACKUP_STATUS_DIR=/d' -e '/^BACKUP_COMMAND=/d' -e '/^BACKUP_LOGGER=/d' "$T/etc/ops.env" > "$T/etc/ops.cron"
+  printf 'BACKUP_STATUS_DIR=%s\nBACKUP_COMMAND=%s\nBACKUP_LOGGER=%s\n' "$SD" "$1" "$T/fake/logger" >> "$T/etc/ops.cron"
+}
+as_cron() { # as_cron — run the documented cron command with /bin/sh; stdout in $T/out/cron
+  /bin/sh -c "ROKH_OPS_ENV='$T/etc/ops.cron' '$scripts/backup-cron.sh'" > "$T/out/cron" 2>&1
+}
+status_check() { ROKH_OPS_ENV="$T/etc/ops.cron" /bin/sh -c "'$scripts/backup-status.sh'"; }
+
+# Why the wrapper exists: under /bin/sh a pipeline reports the logger's status, not the backup's.
+/bin/sh -c "'$T/fake/backup-2' 2>&1 | '$T/fake/logger' -t rokh-backup"
+check "old cron pattern (pipe into logger) masks exit 2 under /bin/sh" test $? = 0
+
+cron_ops "$T/fake/backup-0"
+expect 1 "status check fails closed before any backup is recorded" status_check
+out_has "missing record is an ALERT" '^ALERT .*no backup has been recorded'
+for c in 0 1 2 3 7; do
+  cron_ops "$T/fake/backup-$c"
+  [ -f "$SD/last-success" ] && before_success="$(cat "$SD/last-success")" || before_success=""
+  sleep 1
+  as_cron
+  got=$?
+  check "cron wrapper exits $c when backup.sh exits $c" test "$got" = "$c"
+  case $c in 0) want=ok ;; 1) want=refused ;; 2 | 7) want=failed ;; 3) want=retention-warning ;; esac
+  check "exit $c recorded as result=$want, exit=$c" sh -c "grep -qx 'result=$want' '$SD/last-run' && grep -qx 'exit=$c' '$SD/last-run'"
+  if [ "$c" = 0 ]; then
+    check "exit 0 sends no mail (no output)" test ! -s "$T/out/cron"
+    check "exit 0 logged at info" grep -q 'ARGS -t rokh-backup -p user.info result=ok exit=0' "$T/out/logger.log"
+  else
+    check "exit $c prints an ALERT for cron mail" grep -q "^ALERT rokh backup .*result=$want exit=$c" "$T/out/cron"
+    check "exit $c alert includes the backup output" grep -q "fake backup output, exit $c" "$T/out/cron"
+    check "exit $c logged at err" grep -q "ARGS -t rokh-backup -p user.err result=$want exit=$c" "$T/out/logger.log"
+  fi
+  if [ "$c" = 0 ] || [ "$c" = 3 ]; then
+    check "exit $c updates last-success" test "$(cat "$SD/last-success")" != "$before_success"
+  else
+    check "exit $c leaves last-success unchanged" test "$(cat "$SD/last-success" 2> /dev/null)" = "$before_success"
+  fi
+  case $c in
+    0) expect 0 "status check is silent and ok after a success" status_check
+       check "status check printed nothing" test ! -s "$T/out/last" ;;
+    3) expect 3 "status check warns after a retention warning" status_check ;;
+    *) expect 1 "status check fails after exit $c" status_check
+       out_has "status check names the failed run" "^ALERT .*last backup run $want \(exit $c\)" ;;
+  esac
+done
+cron_ops "$T/fake/backup-0"
+as_cron
+printf '2020-01-01T03:30:00Z\n' > "$SD/last-success"
+expect 1 "status check fails when the last success is stale" status_check
+out_has "stale alert gives the age" 'last successful backup is [0-9]+ h old'
+printf 'garbage\n' > "$SD/last-run"
+expect 1 "status check fails on an unreadable record" status_check
+mv "$SD" "$SD.gone"
+cron_ops "$T/fake/backup-0"
+as_cron
+check "a success that cannot be recorded exits 4 with an ALERT" sh -c "[ $? = 4 ] && grep -q 'could not be recorded' '$T/out/cron'"
+mv "$SD.gone" "$SD"
+# The real backup.sh through the wrapper: one success and one refusal.
+cron_ops "$scripts/backup.sh"
+sleep 1
+as_cron
+got=$?
+check "real backup with leftover incomplete sets exits 3 through the wrapper (got $got)" test "$got" = 3
+check "real exit 3 recorded as retention-warning and alerted" sh -c "grep -qx 'result=retention-warning' '$SD/last-run' && grep -q 'not a complete set' '$T/out/cron'"
+CLEAN="$(dirname "$BK")/rokh-cron-clean"
+mkdir -m 700 "$CLEAN"
+sed -i "s#^BACKUP_DIR=.*#BACKUP_DIR=$CLEAN#" "$T/etc/ops.cron"
+sleep 1
+as_cron
+got=$?
+check "real backup into a clean BACKUP_DIR exits 0 through the wrapper (got $got)" test "$got" = 0
+check "real success recorded ok, no mail" sh -c "grep -qx 'result=ok' '$SD/last-run' && [ ! -s '$T/out/cron' ]"
+expect 0 "status check ok after the real success" status_check
+sed -i "s#^BACKUP_DIR=.*#BACKUP_DIR=$BK/missing#" "$T/etc/ops.cron"
+as_cron
+check "real refusal through the wrapper exits 1" test $? = 1
+check "real refusal recorded and alerted" sh -c "grep -qx 'result=refused' '$SD/last-run' && grep -q 'BACKUP_DIR does not exist' '$T/out/cron'"
+
 echo "== capacity report"
 before="$(find "$BK" "$T/var" | sort | md5sum)"
 expect 0 "capacity-report.sh runs" "$scripts/capacity-report.sh"

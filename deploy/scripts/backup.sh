@@ -12,7 +12,7 @@
 #
 # Exit codes: 0 ok · 1 refused (configuration or preconditions; nothing written)
 #             2 backup failed (nothing published) · 3 backup ok, but retention needs attention
-# Settings: deploy/env/ops.env.example. Copy every set off the server (deploy/README.md §8.3).
+# Settings: deploy/env/ops.env.example. Copy every set off the server (deploy/README.md §8.4).
 set -euo pipefail
 umask 077
 . "$(dirname "$0")/lib.sh"
@@ -120,7 +120,7 @@ log "backup ok: $final ($(du -sh "$final" | cut -f1), ${upload_files} upload fil
 # files and nothing else. Only complete sets count towards KEEP_MIN, and only complete sets older
 # than KEEP_DAYS beyond the newest KEEP_MIN are removed. Incomplete sets, sets with extra files,
 # interrupted .partial runs and every other name are never touched; they are reported (exit 3).
-# These local sets do not replace the off-site copies (deploy/README.md §8.3).
+# These local sets do not replace the off-site copies (deploy/README.md §8.4).
 EXIT_FAIL=3
 status=0
 complete() { # complete DIR — exactly the four expected regular files

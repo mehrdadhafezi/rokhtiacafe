@@ -63,6 +63,15 @@ check "UPLOAD_DIR is absolute" sh -c "val() { grep -E \"^\$2=\" \"\$1\" | cut -d
 check "BACKUP_DIR is on /backup" test "$(val "$env_ops" BACKUP_DIR)" = /backup/rokh
 check "BACKUP_REQUIRE_MOUNT is /backup" test "$(val "$env_ops" BACKUP_REQUIRE_MOUNT)" = /backup
 
+echo "== backup scheduling"
+readme="$d/README.md"
+check "no cron line pipes a backup script" sh -c "! grep -Eq '^[0-9*][0-9*,/ -]* .*backup[a-z-]*\.sh.*\|' '$readme'"
+check "cron example runs backup-cron.sh" grep -Eq '^30 3 \* \* \* /opt/rokh/scripts/backup-cron\.sh$' "$readme"
+check "cron example runs backup-status.sh" grep -Eq '^0  9 \* \* \* /opt/rokh/scripts/backup-status\.sh$' "$readme"
+check "cron example sets MAILTO" grep -Eq '^MAILTO=' "$readme"
+check "monitoring section names both scripts" sh -c "sed -n '/^## 11\./,/^## 12\./p' '$readme' | grep -q backup-cron.sh && sed -n '/^## 11\./,/^## 12\./p' '$readme' | grep -q backup-status.sh"
+check "backup.sh is not scheduled directly anywhere" sh -c "! grep -rEq '^[0-9*][0-9*,/ -]* .*/backup\.sh' '$d' '$repo/docs'"
+
 echo "== systemd unit matches the layout"
 check "unit runs as a dedicated non-root user" sh -c "grep -q '^User=rokh$' '$unit' && ! grep -q '^User=root' '$unit'"
 check "unit ExecStart is ROKH_BIN" grep -q "^ExecStart=$(val "$env_ops" ROKH_BIN) serve\$" "$unit"
