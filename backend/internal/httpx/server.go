@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,10 @@ type Deps struct {
 	API        http.Handler // mounted at /api/v1 when set
 	Media      http.Handler // mounted at /media/ when set (product images)
 	Static     http.Handler // embedded frontend: every other path when set
+
+	// Client-IP telemetry for /api/v1 (docs/SECURITY.md §5.1): counts only, when Stats is set.
+	TrustedProxies []netip.Prefix
+	ClientIPStats  *ClientIPStats
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -42,7 +47,11 @@ func NewRouter(d Deps) http.Handler {
 	r.Get("/readyz", readyz(d))
 
 	if d.API != nil {
-		r.Mount("/api/v1", d.API)
+		if d.ClientIPStats != nil {
+			r.With(ClientIPTelemetry(d.TrustedProxies, d.ClientIPStats)).Mount("/api/v1", d.API)
+		} else {
+			r.Mount("/api/v1", d.API)
+		}
 	}
 	if d.Media != nil {
 		r.Handle("/media/*", d.Media)

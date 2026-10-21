@@ -194,10 +194,13 @@ edited.
   3. a request sent straight to the origin (`curl --resolve rokh.tiacafe.ir:443:62.204.61.18`)
      with a forged `X-Forwarded-For: 198.51.100.77, <an edge IP>`.
 
-  Go only if, in every case, there is a single header line whose **right-most** entry is the
+  Go only if, in every case, the **right-most entry of all header lines combined in order** is the
   address LiteSpeed actually saw (the edge in 1–2, your own IP in 3) and the forged value is never
-  right-most. Then decide `TRUSTED_PROXIES` (docs/SECURITY.md §5.1). Anything else (pass-through,
-  a second line, replacement) keeps client-IP handling blocked; see R1 for the options.
+  right-most. LiteSpeed may write its entry on the same line or as a new *last* line (rokh combines
+  lines). Writing it anywhere else, or passing the header through, keeps client-IP handling
+  blocked (**STOP**). If the CDN's part contains no visitor (only edges), keep
+  `TRUSTED_PROXIES=127.0.0.1` and see R1. Full procedure: R1-B2 runtime acceptance; none of it runs
+  before the owner approves it and gate G1 (disk) passes.
 - **Security headers intact.** `Strict-Transport-Security`, `Content-Security-Policy` and
   `X-Frame-Options` reach the browser exactly once: no duplicates or removals by LiteSpeed or the
   CDN.
@@ -447,6 +450,15 @@ container (`docker compose stop`) without removing it or its volume, so nothing 
 - **Daily, by hand:** `/opt/rokh/scripts/backup-status.sh -v` prints `backup ok: last success …`
   (anything else is an incident, even without a mail); `systemctl is-active rokh`;
   `curl -fsS http://127.0.0.1:18080/readyz`. Details of a run: `journalctl -t rokh-backup -n 50`.
+- **Client IP (risk R1):** `journalctl -u rokh --since today | grep '"client ip summary"'` shows one
+  line per 5 minutes with API traffic: counts only (no addresses). Healthy with
+  `TRUSTED_PROXIES=127.0.0.1`: `source_forwarded` ≈ `total`, `forwarded_direct` ≈ `total` (each
+  visitor appears as its edge), `fallbacks` and `loopback` near 0. Healthy after the edge ranges
+  are trusted: `forwarded_direct` near 0 (non-zero = direct-to-origin traffic or an edge missing
+  from the list). A **WARN** line (≥ 20 requests and ≥ 1 % fell back or became loopback in one
+  interval) is an incident: compare `source_fallback_*` counters, check that LiteSpeed and the
+  include are unchanged, and if it started after a `TRUSTED_PROXIES` change, set it back to
+  `127.0.0.1` and restart. Limits are never relaxed to compensate.
 - **Monthly:** `df -h / /backup`, `docker system df`, and the size of the newest `db.dump`.
 - **Logs.** Production logs are JSON lines with a request id. Passwords, tokens, cookies and push
   endpoints are never logged.

@@ -194,14 +194,18 @@ func serve(ctx context.Context) error {
 		}
 		logger.Warn("no frontend embedded: serving the API only (use the Vite dev server for the UI)")
 	}
+	ipStats := &httpx.ClientIPStats{}
 	handler := httpx.NewRouter(httpx.Deps{
-		Logger:     logger,
-		DB:         readiness{q: queries},
-		Production: cfg.IsProduction(),
-		API:        apiHandler.Handler(),
-		Media:      images.MediaHandler(),
-		Static:     static,
+		Logger:         logger,
+		DB:             readiness{q: queries},
+		Production:     cfg.IsProduction(),
+		API:            apiHandler.Handler(),
+		Media:          images.MediaHandler(),
+		Static:         static,
+		TrustedProxies: cfg.TrustedProxies,
+		ClientIPStats:  ipStats,
 	})
+	go ipStats.Run(ctx, logger, httpx.ClientIPSummaryInterval)
 	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
 	go expireOrders(ctx, orderSvc, logger)
 	go cleanupNotifications(ctx, pool, logger)
@@ -240,6 +244,7 @@ func serve(ctx context.Context) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
+	ipStats.Flush(logger) // requests that finished while draining
 	logger.Info("server stopped")
 	return nil
 }

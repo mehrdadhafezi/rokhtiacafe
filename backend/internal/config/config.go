@@ -206,6 +206,15 @@ func (c *Config) validateProduction() []error {
 	if len(c.TrustedProxies) == 0 {
 		errs = append(errs, errors.New("production requires TRUSTED_PROXIES (the reverse proxy, e.g. 127.0.0.1); otherwise every customer shares one rate-limit bucket"))
 	}
+	// Defence in depth, not a proof of safety: a trusted proxy may name any client it likes, so a
+	// wide range hands that choice to whoever holds an address in it. The published CDN edge ranges
+	// are /22 or narrower; a legitimately wider range needs a reviewed change, and is refused loudly
+	// at startup rather than accepted silently (docs/SECURITY.md §5.1).
+	for _, p := range c.TrustedProxies {
+		if (p.Addr().Is4() && p.Bits() < 16) || (p.Addr().Is6() && p.Bits() < 32) {
+			errs = append(errs, fmt.Errorf("production TRUSTED_PROXIES entry %s is too broad (IPv4 needs /16 or narrower, IPv6 /32 or narrower)", p))
+		}
+	}
 	if !filepath.IsAbs(c.UploadDir) && !strings.HasPrefix(c.UploadDir, "/") {
 		errs = append(errs, errors.New("production UPLOAD_DIR must be an absolute path outside the web root"))
 	}
