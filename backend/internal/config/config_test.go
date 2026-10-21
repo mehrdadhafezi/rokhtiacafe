@@ -79,6 +79,25 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
+// The MizbanCloud edge list published at https://mizbancloud.com/ips.txt (retrieved 2026-10-21)
+// is accepted next to loopback, as are the narrowest boundaries of the guard (/16, /32).
+func TestProductionAcceptsCDNEdgeRanges(t *testing.T) {
+	setProduction(t)
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,185.226.140.0/22,62.204.61.128/28,185.49.231.0/28,"+
+		"193.37.37.208/28,62.204.61.40/29,77.72.80.224/28,31.25.90.192/28,152.233.66.88/29")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("edge ranges rejected: %v", err)
+	}
+	if len(c.TrustedProxies) != 9 {
+		t.Errorf("proxies = %v", c.TrustedProxies)
+	}
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,198.18.0.0/16,2001:db8::/32")
+	if _, err := Load(); err != nil {
+		t.Errorf("boundary prefixes rejected: %v", err)
+	}
+}
+
 func TestLoadProductionUsesJSONLogs(t *testing.T) {
 	setProduction(t)
 
@@ -232,6 +251,11 @@ func TestProductionDeploymentRules(t *testing.T) {
 		{"HTTP_ADDR", "0.0.0.0:8080", "loopback"},
 		{"HTTP_ADDR", "62.204.61.18:8080", "loopback"},
 		{"TRUSTED_PROXIES", "", "TRUSTED_PROXIES"},
+		{"TRUSTED_PROXIES", "127.0.0.1,0.0.0.0/0", "too broad"},
+		{"TRUSTED_PROXIES", "127.0.0.1,::/0", "too broad"},
+		{"TRUSTED_PROXIES", "127.0.0.1,10.0.0.0/8", "too broad"},
+		{"TRUSTED_PROXIES", "127.0.0.1,185.226.0.0/15", "too broad"},
+		{"TRUSTED_PROXIES", "127.0.0.1,2001:db8::/31", "too broad"},
 		{"UPLOAD_DIR", "./data/uploads", "UPLOAD_DIR"},
 		{"DATABASE_URL", "postgres://postgres@localhost/rokhtiacafe", "app role"},
 		{"DATABASE_URL", "postgres://rokh_owner@localhost/rokhtiacafe", "app role"},

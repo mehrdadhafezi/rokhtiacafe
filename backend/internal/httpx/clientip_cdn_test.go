@@ -34,9 +34,10 @@ func TestClientIPBehindCDN(t *testing.T) {
 		{"MC_REAL_IP and X-Real-IP are ignored", loopbackOnly, attacker,
 			map[string]string{"MC_REAL_IP": visitor, "X-Real-IP": visitor}, attacker},
 		// If LiteSpeed replaced the header with its own peer instead of appending, only the edge is
-		// left: with the edges trusted, every visitor falls back to the peer, 127.0.0.1.
+		// left: with the edges trusted, visitors fall back to that verified edge (R1-B2), never to
+		// a shared 127.0.0.1.
 		{"proxy replaces the header", loopbackOnly, edge, nil, edge},
-		{"proxy replaces the header, edges trusted", withEdges, edge, nil, "127.0.0.1"},
+		{"proxy replaces the header, edges trusted", withEdges, edge, nil, edge},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest("GET", "/", nil)
@@ -53,7 +54,7 @@ func TestClientIPBehindCDN(t *testing.T) {
 
 // TestClientIPUpstreamFailureModes pins down what rokh does when the proxy in front of it does
 // NOT sanitize or append correctly. These cases pass because they assert today's behaviour, and
-// several of them are spoofable: they are why production client-IP handling stays blocked until
+// the two marked UNSAFE are spoofable: they are why production client-IP handling stays blocked until
 // LiteSpeed's forwarding is measured (docs/HOSTING-ASSESSMENT.md R1). rokh can only be as
 // trustworthy as the header it is handed by a trusted peer.
 func TestClientIPUpstreamFailureModes(t *testing.T) {
@@ -71,9 +72,9 @@ func TestClientIPUpstreamFailureModes(t *testing.T) {
 		{"UNSAFE: proxy passes a forged header through unchanged", loopbackOnly, []string{forged}, forged},
 		// SPOOFABLE: a direct-to-origin request forges a trusted edge entry; the proxy appends nothing.
 		{"UNSAFE: forged edge entry, nothing appended", withEdges, []string{forged + ", " + edge}, forged},
-		// SPOOFABLE: the proxy adds its peer as a second header line instead of appending to the
-		// first. rokh reads only the first line (Header.Get), which the visitor controls.
-		{"UNSAFE: real peer in a second header line is ignored", loopbackOnly, []string{forged, "203.0.113.5"}, forged},
+		// Fixed (R1-B2): a proxy that adds its peer as a second header line is honoured, because all
+		// lines are combined in order (RFC 9110 §5.3); the forged first line no longer wins.
+		{"real peer in a second header line wins over a forged first line", loopbackOnly, []string{forged, "203.0.113.5"}, "203.0.113.5"},
 		// Not spoofable, but collapses visitors: a malformed right-most entry stops the walk.
 		{"malformed right-most entry falls back to the peer", loopbackOnly, []string{forged + ", garbage"}, "127.0.0.1"},
 		{"empty entry falls back to the peer", loopbackOnly, []string{forged + ", "}, "127.0.0.1"},

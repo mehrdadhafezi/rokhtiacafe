@@ -74,38 +74,68 @@ expiry, staff cancellation, and the ADMIN kill switch (`PUT /admin/ordering`). A
 existing idempotency key is not counted against the limits.
 Limits reset on restart (acceptable for a single-instance app). Values are owner decision O6.
 
-### 5.1 Client IP behind the CDN (T14)
+### 5.1 Client IP behind the CDN (T14, R1)
 
 Production chain: visitor → MizbanCloud edge → LiteSpeed on the origin → rokh on `127.0.0.1:18080`.
-rokh's direct peer is always LiteSpeed on loopback. The CDN edge addresses are *not* the proxy
-identity rokh sees; they can only appear inside `X-Forwarded-For`.
+rokh's direct peer is always LiteSpeed on loopback. CDN edge addresses are *not* the proxy identity
+rokh sees; they can only appear inside `X-Forwarded-For`. Evidence levels used below:
+**[vendor]** documented by LiteSpeed/MizbanCloud, not observed here · **[code]** implemented and
+unit-tested in Go · **[runtime]** observed on the production server (none yet).
 
-- **Selection** (`internal/httpx/clientip.go`, tested): only when the peer is in `TRUSTED_PROXIES`,
-  walk the **first** `X-Forwarded-For` header line from the right and take the first address that
-  is not itself trusted, stopping at the first malformed entry (then the peer is used). A peer that
-  is not trusted is never overridden; that is the only guarantee rokh gives on its own.
-- **What rokh cannot check:** whether the right-most entry really is the address the trusted
-  proxy saw. Visitor-written entries are ignored *only if* LiteSpeed (and the CDN) append the real
-  peer to the end of that same header line. If the proxy passes the visitor's header through
-  unchanged, or puts the real peer in a second header line, the visitor chooses their own address
-  (`TestClientIPUpstreamFailureModes`, cases marked UNSAFE). LiteSpeed's actual behaviour on this
-  server is **not verified**.
-- **Ignored headers:** rokh never reads `MC_REAL_IP` or `X-Real-IP` (both sent by MizbanCloud),
-  and the LiteSpeed include removes them before proxying.
-- **Default:** `TRUSTED_PROXIES=127.0.0.1`. This does **not** by itself make the client IP
-  spoof-resistant: it means rokh trusts whatever LiteSpeed puts at the end of the header. If
-  LiteSpeed appends correctly, the visible client is the edge address (visitors behind one edge
-  share a bucket); if it does not, the address is visitor-controlled. Rate limits are abuse
-  controls only (§5), so the impact is weaker limits, not an authorisation bypass; still,
-  production client-IP handling is blocked until measured.
-- **Adding the edge ranges** to `TRUSTED_PROXIES` is correct only if LiteSpeed *appends* the edge
-  address to the header it receives. If it replaces the header, every visitor collapses to
-  `127.0.0.1`. Measure this before go-live (docs/HOSTING-ASSESSMENT.md, risk R1).
-- **Direct-to-origin requests** (bypassing the CDN): *if* LiteSpeed appends the real peer, that
-  untrusted address is selected even when the request forges edge addresses
-  (`TestClientIPBehindCDN`); if it does not append, the forged value wins (UNSAFE cases).
-- **Possible later hardening** (needs a separately approved code change, not in T14): read all
-  `X-Forwarded-For` lines, or a single header that the proxy overwrites with the real peer.
+- **Selection [code]** (`internal/httpx/clientip.go`): only when the peer is in `TRUSTED_PROXIES`,
+  combine **all** `X-Forwarded-For` field lines in their received order (RFC 9110 §5.3; blank lines
+  skipped), read the chain from the **right**, and take the first address that is not a trusted
+  proxy. A chain split over several lines resolves exactly like the same chain on one line. A peer
+  that is not trusted is never overridden; that is the only guarantee rokh gives on its own.
+- **Fail closed [code]:** when the visitor cannot be established, the answer is the **anchor**:
+  the right-most entry when it is a trusted proxy (the address LiteSpeed reports as its own peer,
+  i.e. the edge it accepted the connection from), otherwise the peer `127.0.0.1`. Entries further
+  left are header claims: they are believed only while looking for the visitor, never used as a
+  fallback identity, so writing addresses that happen to lie in a trusted range cannot choose a
+  bucket (R1-B3, `TestB3FallbackAnchorAdversarial`). Trusted-range membership alone never makes a
+  header entry a verified hop.
+  Cases: no header (`fallback_missing`), an unparsable or zoned entry (`fallback_malformed`), no
+  untrusted entry within the 16 right-most entries (`fallback_too_long`; entries further left are
+  never parsed), only trusted proxies (`fallback_proxy_only`).
+- **What rokh cannot check:** whether the right-most entry really is the address LiteSpeed saw,
+  or which line LiteSpeed wrote. **[vendor]** In "Trusted IP Only" mode LiteSpeed modifies the
+  backend `X-Forwarded-For` "to include the connecting peer address" (only "Keep Header from
+  Trusted IP" does not); whether on the same line, a new last line, or by replacement is **not
+  documented**. If LiteSpeed passed the header through unchanged, or wrote its peer anywhere but
+  at the end, the visitor would choose their own address (`TestR1KnownLimitationNoAppend`, case
+  M06). **[runtime]** not yet verified.
+- **Ignored headers [code]:** rokh never reads `MC_REAL_IP` or `X-Real-IP`; the LiteSpeed include
+  also removes them before proxying (whether LiteSpeed honours that is not yet verified).
+- **`TRUSTED_PROXIES` today:** `127.0.0.1` only. This is **not** by itself spoof-resistant: rokh
+  trusts what LiteSpeed puts at the end of the header. If LiteSpeed appends correctly, each
+  visitor appears as their CDN edge (visitors behind one edge share buckets); if it does not, the
+  address is visitor-controlled. The MizbanCloud edge ranges (`https://mizbancloud.com/ips.txt`)
+  are added **only after** the runtime acceptance passes. A stale list degrades safely: an edge
+  missing from it is treated as the client (shared bucket), never as a forged address.
+- **Range guard [code]:** production refuses `TRUSTED_PROXIES` entries wider than /16 (IPv4) or
+  /32 (IPv6). This is a defence-in-depth heuristic, not a proof: the current edge list is /22 or
+  narrower; a legitimately wider range (some CDNs publish IPv6 /29) needs a reviewed change and is
+  refused loudly at startup, never accepted silently.
+- **Direct-to-origin requests:** *if* LiteSpeed appends the real peer, that untrusted address is
+  selected even when the request forges edge entries or a whole first line **[code]**; otherwise
+  the forged value wins (same limitation as above).
+- **Observability [code]:** every `/api/v1` request is classified into fixed counters (by source,
+  multi-line headers, "forwarded with no trusted hop crossed", loopback attribution). Every
+  5 minutes with traffic, one log line `"msg":"client ip summary"` is written, at WARN when at least
+  20 requests and at least 1 % of all fell back or were attributed to loopback. It contains counts
+  only: no addresses, no header values, no cookies (`TestClientIPSummaryLogIsPrivateAndBounded`).
+  Each summary is one consistent snapshot (a mutex guards the counter bank; total = sum of
+  sources), and the last partial interval is flushed on shutdown, after in-flight requests drained
+  (`TestB3StatsConcurrentConservation`, `TestB3StatsFinalFlush`). It cannot detect a forged chain
+  that looks valid. Operator use: deploy/README.md §11.
+- **Consequences of a fallback [code]:** the fallback address is used like any client IP: for the
+  per-IP rate limits, the per-client pending-order cap (`client_key`) and `audit_logs.ip`. Normal
+  traffic never lands on it while the chain is healthy; if most traffic does, many customers share
+  those limits. No limit is disabled or relaxed automatically; the response is operational
+  (deploy/README.md §11, docs/HOSTING-ASSESSMENT.md R1).
+- **R1 PASS** requires all of: the runtime acceptance (R1-B2-RT) observed on the server, the owner's
+  sign-off of gate G3, and a clean `client ip summary` window after enabling the edge ranges.
+  Unit tests alone never make R1 PASS.
 - **Caching:** the CDN must not cache `/api/*`, `/admin/*` or HTML (risk R2). Order tracking
   (`GET /public/order`, token in a header) sends `no-store`.
 
