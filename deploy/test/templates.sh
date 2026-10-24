@@ -97,38 +97,52 @@ for k in NoNewPrivileges ProtectSystem ProtectHome PrivateTmp CapabilityBounding
 done
 # systemd-analyze verify also loads the host's own units and reports their problems (e.g. a CI
 # runner image whose units use removed options). Only a diagnostic that names another unit file in
-# a system unit directory, as "/dir/name.unit:LINE: ...", is foreign; every other line, including
-# any line about rokh.service or without a file prefix, counts against the Rokh unit.
+# a system unit directory, as "/dir/name.unit:LINE: ...", and does not mention rokh anywhere, is
+# foreign; every other line counts against the Rokh unit. A non-zero exit always fails: it cannot be
+# attributed to another unit from the output, so it is never explained away.
 foreign_re='^/(usr/lib|lib|etc|run)/systemd/system/[^/:]+:[0-9]+: '
 foreign_unit_diag() { # foreign_unit_diag LINE OWN_UNIT_PATH
-  [[ $1 =~ $foreign_re ]] && [[ $1 != "$2"* ]]
+  [[ $1 =~ $foreign_re ]] && [[ $1 != "$2"* ]] && [[ ${1,,} != *rokh* ]]
 }
 not_foreign() { ! foreign_unit_diag "$@"; }
+# verify_verdict OUTPUT EXIT OWN_UNIT_PATH — 0 when the Rokh unit verified cleanly. Sets own_diag
+# (lines that count against Rokh) and foreign_diag (other units' lines, reported as INFO).
+verify_verdict() {
+  local line
+  own_diag="" foreign_diag=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if foreign_unit_diag "$line" "$3"; then foreign_diag+="$line"$'\n'; else own_diag+="$line"$'\n'; fi
+  done <<< "$1"
+  [ "$2" -eq 0 ] && [ -z "$own_diag" ]
+}
+verdict_fails() { ! verify_verdict "$@"; }
 own="/tmp/x/rokh.service"
-check "verify filter: a runner unit's diagnostic is foreign" \
-  foreign_unit_diag "/usr/lib/systemd/system/walinuxagent.service:21: Support for option CPUAccounting= has been removed and it is ignored" "$own"
+runner_diag="/usr/lib/systemd/system/walinuxagent.service:21: Support for option CPUAccounting= has been removed and it is ignored"
+check "verify filter: a runner unit's diagnostic is foreign" foreign_unit_diag "$runner_diag" "$own"
 check "verify filter: a runner slice's diagnostic is foreign" \
   foreign_unit_diag "/usr/lib/systemd/system/system-xfs_scrub.slice:15: Support for option CPUAccounting= has been removed and it is ignored" "$own"
 check "verify filter: a Rokh unit diagnostic is never foreign" not_foreign "$own:12: Unknown key name 'Foo' in section 'Service', ignoring." "$own"
 check "verify filter: an unprefixed diagnostic is never foreign" not_foreign "rokh.service: Command /bin/true is not executable: No such file" "$own"
 check "verify filter: a unit outside the system unit directories is never foreign" not_foreign "/home/x/evil.service:1: Unknown section" "$own"
+check "verify filter: rokh.service in /etc/systemd/system is never foreign" not_foreign "/etc/systemd/system/rokh.service:9: Unknown key name 'Foo' in section 'Service', ignoring." "$own"
+check "verify filter: rokh.service in /usr/lib/systemd/system is never foreign" not_foreign "/usr/lib/systemd/system/rokh.service:9: Unknown key name 'Foo' in section 'Service', ignoring." "$own"
+check "verify filter: another unit's line that mentions rokh.service is never foreign" not_foreign "/usr/lib/systemd/system/docker.service:3: Failed to add dependency on rokh.service, ignoring" "$own"
+check "verify verdict: foreign diagnostics with exit 0 pass" verify_verdict "$runner_diag" 0 "$own"
+check "verify verdict: foreign diagnostics with a non-zero exit fail" verdict_fails "$runner_diag" 1 "$own"
+check "verify verdict: no output with a non-zero exit fails" verdict_fails "" 1 "$own"
+check "verify verdict: a Rokh diagnostic with exit 0 fails" verdict_fails "$runner_diag"$'\n'"$own:12: Unknown key name 'Foo' in section 'Service', ignoring." 0 "$own"
+check "verify verdict: no output with exit 0 passes" verify_verdict "" 0 "$own"
 if command -v systemd-analyze > /dev/null && [ -d /run/systemd/system ]; then
   tmpu="$(mktemp -d)"
   sed -e 's#^ExecStart=.*#ExecStart=/bin/true#' -e '/^EnvironmentFile=/d' -e 's#^User=rokh#User=daemon#' \
     -e 's#^Group=rokh#Group=daemon#' -e 's#^WorkingDirectory=.*#WorkingDirectory=/#' "$unit" > "$tmpu/rokh.service"
   out="$(systemd-analyze verify "$tmpu/rokh.service" 2>&1)"
   vrc=$?
-  own_diag="" foreign_diag=""
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    if foreign_unit_diag "$line" "$tmpu/rokh.service"; then foreign_diag+="$line"$'\n'; else own_diag+="$line"$'\n'; fi
-  done <<< "$out"
-  if [ -n "$own_diag" ]; then
-    bad "systemd-analyze verify: $own_diag"
-  elif [ "$vrc" -ne 0 ] && [ -z "$foreign_diag" ]; then
-    bad "systemd-analyze verify exited $vrc without output"
+  if verify_verdict "$out" "$vrc" "$tmpu/rokh.service"; then
+    ok "systemd-analyze verify (paths substituted, exit 0)"
   else
-    ok "systemd-analyze verify (paths substituted)"
+    bad "systemd-analyze verify (exit $vrc): ${own_diag:-no Rokh diagnostics; a non-zero exit is never ignored}"
   fi
   [ -z "$foreign_diag" ] || printf 'INFO  systemd-analyze reported other units on this host (not Rokh):\n%s' "$foreign_diag"
   rm -f "$tmpu/rokh.service" && rmdir "$tmpu"
