@@ -17,7 +17,7 @@ visitor ──HTTPS──▶ MizbanCloud edge ──HTTPS──▶ LiteSpeed (or
                                                    │ userdata include, ProxyPass
                                                    ▼
                                      rokh serve on 127.0.0.1:18080   (systemd, user rokh)
-                                                   │ TCP 127.0.0.1:15432
+                                                   │ TCP 127.0.0.1:ROKH_PG_PORT (15433 proposed)
                                                    ▼
                                      PostgreSQL 16 in Docker (rokh-postgres, dedicated)
 ```
@@ -44,6 +44,7 @@ SHA-256 does not match CI.
 | `/opt/rokh/bin/rokh`, `rokh.prev` | root:rokh 750 | current and previous binary (rollback) |
 | `/opt/rokh/scripts/` | root:root 750 | copies of `deploy/scripts/*` (including `lib.sh`) |
 | `/opt/rokh/postgres/compose.yaml`, `initdb/` | root:root 750 | `deploy/postgres/compose.yaml`; `deploy/local/postgres/{10-rokh-init.sh,roles.sql}` |
+| `/opt/rokh/postgres/.env` | root:root 600 | Compose variables `ROKH_PG_PORT`, `ROKH_PG_IMAGE`; no secrets (template `env/compose.env.example`) |
 | `/etc/rokh/rokh.env` | root:rokh 640 | runtime settings and secrets (template `env/production.env.example`) |
 | `/etc/rokh/migrate.env` | root:root 600 | `MIGRATION_DATABASE_URL`, owner role (`env/migrate.env.example`) |
 | `/etc/rokh/postgres.env` | root:root 600 | first-initialisation passwords for the container (`env/postgres.env.example`) |
@@ -91,13 +92,19 @@ Add `--pty` instead of `--pipe` for interactive commands (`user create` asks for
    install -d -o root -g root -m 700 /backup/rokh
    install -d -o root -g root -m 700 /var/lib/rokh-backup   # backup run records (§8.1)
    ```
-3. **Settings.** Copy the four templates from `deploy/env/` to `/etc/rokh/` with the owners and
-   modes from §2, then fill them in:
+3. **Settings.** Copy `production.env.example` (→ `rokh.env`), `migrate.env.example`,
+   `postgres.env.example` and `ops.env.example` from `deploy/env/` to `/etc/rokh/`, and
+   `compose.env.example` to `/opt/rokh/postgres/.env`, with the owners and modes from §2, then fill
+   them in:
+   - `ROKH_PG_PORT` in `/opt/rokh/postgres/.env` (15433 is only proposed: owner decision), and the
+     same port in `DATABASE_URL` and `MIGRATION_DATABASE_URL`;
    - three new passwords (`openssl rand -hex 24`) in `postgres.env`; the owner and app passwords
      also go into `migrate.env` and `rokh.env`;
    - `APP_SECRET_KEY` from `rokh secret gen`; optionally `VAPID_*` from `rokh vapid gen`.
-4. **PostgreSQL** (§4): check that the port is free (`ss -ltn | grep 15432` prints nothing),
-   then `cd /opt/rokh/postgres && docker compose up -d`. `docker compose ps` must show `healthy`.
+4. **PostgreSQL** (§4): right before the first start, check that the chosen port is free
+   (`ss -ltnH 'sport = :15433'` prints nothing, with your `ROKH_PG_PORT`), pin the image (§4.1),
+   and check `cd /opt/rokh/postgres && docker compose config` shows `127.0.0.1:<port>` and the
+   `@sha256:` image. Then `docker compose up -d`; `docker compose ps` must show `healthy`.
 5. **Binary:** `verify-release.sh`, then `install -o root -g rokh -m 750 rokh-linux-amd64 /opt/rokh/bin/rokh`.
 6. **Schema:** `/opt/rokh/scripts/migrate.sh up`, then `migrate.sh status` (expect `0 pending`).
 7. **Preflight:** `/opt/rokh/scripts/preflight.sh` must end with `preflight ok`.
@@ -116,17 +123,31 @@ check, `stop_grace_period: 60s`, 1 GB memory and 1.5 CPU limits, `shared_buffers
 log rotation (3 × 10 MB). It is for Rokh only: never point Rokh at another project's PostgreSQL,
 and never let another project use this one.
 
-- **No public port.** The container port is published on `127.0.0.1:15432` only. The rokh service
-  on the host connects to it; nothing outside the host can. Inside the container, socket
+- **No public port.** The container port is published on `127.0.0.1:ROKH_PG_PORT` only. The rokh
+  service on the host connects to it; nothing outside the host can. Inside the container, socket
   connections use peer authentication and TCP uses `scram-sha-256`; there are no `trust` rules.
 - **Roles** (docs/DATABASE.md §6.1). On first start, `initdb/10-rokh-init.sh` runs the same
-  `roles.sql` as development and CI: `rokh_owner` owns the database and schema `rokh`, and
+  `roles.sql` as development and CI, reading the passwords from the container environment with
+  psql's `\getenv` (never as command-line arguments): `rokh_owner` owns the database and schema `rokh`, and
   `rokh_app` gets `CONNECT`. The migrations grant `rokh_app` its DML-only privileges. Neither role
   is superuser, `CREATEDB` or `CREATEROLE`. The container superuser `postgres` is used only to
   create restore targets (§9) and for upgrades.
-- **Pin the image** after the first pull. Record the digest
-  (`docker image inspect --format '{{index .RepoDigests 0}}' postgres:16-bookworm`) in
-  `ROKH_PG_IMAGE`, so a later `docker compose pull` cannot change the version unnoticed.
+- **Compose variables.** `compose.yaml` has no default for `ROKH_PG_PORT` or `ROKH_PG_IMAGE`:
+  without them Compose refuses to start, so it can never fall back to a port another service uses.
+  Both live in `/opt/rokh/postgres/.env` (root:root 600, template `env/compose.env.example`), which
+  Compose reads from the project directory whenever it runs on `/opt/rokh/postgres/compose.yaml`.
+  A variable **exported in the shell overrides that file**: never export `ROKH_PG_*`, and run
+  `docker compose config` (port and image) before every `up`. `preflight.sh` checks that the port
+  equals the one in both database URLs and that the image is pinned.
+- **Pin the image** (reproducible): before the first start and for every minor update,
+  1. `docker pull postgres:16-bookworm`
+  2. `docker image inspect --format '{{index .RepoDigests 0}}' postgres:16-bookworm` prints
+     `postgres@sha256:<64 hex>`;
+  3. write `ROKH_PG_IMAGE=postgres:16-bookworm@sha256:<64 hex>` in `/opt/rokh/postgres/.env` and
+     record the digest and date in the operations log;
+  4. `docker compose config --images` must print exactly that reference.
+  With a digest, `docker compose pull` and `up` always use that exact image; changing it is an
+  explicit edit of `.env`.
 - **Storage.** The volume lives on the root disk. The café database is small (expected well under
   1 GB in the first year), but check `docker system df` and `df -h /` monthly (§11).
 - **Docker and the host firewall.** Docker manages its own iptables rules. If the server firewall
@@ -135,8 +156,9 @@ and never let another project use this one.
 
 ### 4.2 Minor updates (16.x → 16.y)
 
-Backup (§8) → `docker compose pull` (new digest) → `docker compose up -d` → health check →
-`/readyz` → `rokh check`. The data stays in the volume.
+Backup (§8) → pin the new digest (§4.1, steps 1–4) → `docker compose up -d` → health check →
+`/readyz` → `rokh check`. The data stays in the volume. To go back, restore the previous
+`ROKH_PG_IMAGE` line and `docker compose up -d` again (same major version only).
 
 ### 4.3 Major upgrades (16 → 17)
 
@@ -298,7 +320,11 @@ has passed.
 - `BACKUP_DIR` is unset, relative, missing (it is never created) or world-writable;
 - `BACKUP_DIR` is not on `BACKUP_REQUIRE_MOUNT` (`/backup`), which protects against the backup
   disk not being mounted, or it is on the root filesystem;
-- less than `BACKUP_MIN_FREE_MB` is free;
+- less than `BACKUP_MIN_FREE_MB` is free. `/backup` is shared with the server's other backups,
+  so this is a reserve that protects them: the template sets 84480 MB (about 10 % of the 825 GB
+  filesystem observed in LRA-2). Recompute it if the mount changes, and use the host's alert
+  threshold if it is stricter. When the reserve is reached Rokh's backup is refused and alerts
+  (exit 1); it never deletes anything to make room;
 - `UPLOAD_DIR` is missing;
 - another backup holds the lock.
 
@@ -333,14 +359,20 @@ verified off-site copy, gate G8 is not met.
 ### 8.4 Off-site copy (required)
 
 The backup disk is inside the same server, so copy every set off it, encrypted at rest
-(docs/SECURITY.md §9), at least weekly and before every upgrade:
+(docs/SECURITY.md §9), at least weekly and before every upgrade.
 
-1. Pull it from the owner's PC (the server never holds credentials for the destination):
-   `scp -r root@SERVER:/backup/rokh/rokh-YYYYmmdd-HHMMSS ./`
+**The encryption tool, the key custody and the pull account are an open owner decision:**
+[docs/BACKUP-OFFSITE-DECISION.md](../docs/BACKUP-OFFSITE-DECISION.md). No tool is selected, no key
+exists and nothing is installed until the owner records that decision; until then gate G8 cannot be
+met. The tool-independent steps are:
+
+1. Pull the set from the owner's PC (the server never holds credentials for the destination),
+   with the account chosen in the decision record.
 2. Verify it: `cd rokh-YYYYmmdd-HHMMSS && sha256sum -c SHA256SUMS`.
-3. Encrypt it, e.g. `tar -cf - rokh-YYYYmmdd-HHMMSS | age -r <owner public key> > rokh-YYYYmmdd-HHMMSS.tar.age`.
-   Store it in two places (PC and cloud storage), then delete the unencrypted copy from the PC.
-4. Record the date in the operations log.
+3. Encrypt it with the recorded tool and public key, store it in the recorded places, then delete
+   the unencrypted copy from the PC.
+4. Prove it can be read back: decrypt it on a second machine and run `sha256sum -c SHA256SUMS`.
+5. Record the date, the set name and the SHA-256 of the encrypted file in the operations log.
 
 Rehearse a restore (§9) from an off-site copy at least once a quarter.
 

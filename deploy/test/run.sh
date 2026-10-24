@@ -118,6 +118,7 @@ cat > "$T/etc/ops.env" << EOF
 ROKH_BIN=$BIN
 ROKH_ENV_FILE=$T/etc/rokh.env
 ROKH_MIGRATE_ENV_FILE=$T/etc/migrate.env
+ROKH_COMPOSE_ENV_FILE=$T/etc/compose.env
 ROKH_RUN_AS=$RUN_AS
 PG_CLIENT=$PG_CLIENT
 PG_CONTAINER=$PG_CONTAINER
@@ -129,6 +130,11 @@ BACKUP_KEEP_DAYS=14
 BACKUP_KEEP_MIN=3
 EOF
 export ROKH_OPS_ENV="$T/etc/ops.env"
+# Compose settings generated from the committed template: the test port and a well-formed digest.
+sed -e "s#^ROKH_PG_PORT=.*#ROKH_PG_PORT=$TEST_PG_PORT#" \
+  -e "s#^ROKH_PG_IMAGE=.*#ROKH_PG_IMAGE=postgres:16-bookworm@sha256:$(printf '%064d' 0)#" \
+  "$repo/deploy/env/compose.env.example" > "$T/etc/compose.env"
+chmod 600 "$T/etc/compose.env"
 
 # Host mode: shims record the arguments of every PostgreSQL client call (password leak check).
 if [ "$PG_CLIENT" = host ]; then
@@ -169,6 +175,8 @@ echo "== configuration"
 expect 0 "preflight passes with the template settings" "$scripts/preflight.sh"
 out_has "preflight: config check ready" 'ready to serve'
 out_has "preflight: listens on 127.0.0.1:18080" 'listen +127.0.0.1:18080'
+out_has "preflight: compose port matches the database URLs" "published on 127.0.0.1:$TEST_PG_PORT"
+out_has "preflight: image pinned by digest" 'image pinned by digest'
 cfg_fail() { # cfg_fail NAME PATTERN KEY=VALUE — config check with one setting changed must fail
   local name=$1 pat=$2 kv=$3
   (
@@ -206,6 +214,20 @@ grep '^MIGRATION_DATABASE_URL=' "$T/etc/migrate.env" >> "$T/etc/rokh.env"
 expect 1 "preflight rejects owner credentials in rokh.env" "$scripts/preflight.sh"
 out_has "preflight names the problem" 'MIGRATION_DATABASE_URL is in'
 cp "$T/etc/rokh.env.bak" "$T/etc/rokh.env"
+cp "$T/etc/compose.env" "$T/etc/compose.env.bak"
+sed -i 's#@sha256:.*#@sha256:CHANGE_ME#' "$T/etc/compose.env"
+expect 1 "preflight rejects an image not pinned by digest" "$scripts/preflight.sh"
+out_has "preflight names the unpinned image" 'is not pinned'
+cp "$T/etc/compose.env.bak" "$T/etc/compose.env"
+sed -i "s#^ROKH_PG_PORT=.*#ROKH_PG_PORT=$((TEST_PG_PORT + 1))#" "$T/etc/compose.env"
+expect 1 "preflight rejects a compose port that differs from DATABASE_URL" "$scripts/preflight.sh"
+out_has "preflight names the port mismatch" 'but compose publishes'
+sed -i 's#^ROKH_PG_PORT=.*#ROKH_PG_PORT=#' "$T/etc/compose.env"
+expect 1 "preflight rejects an empty ROKH_PG_PORT" "$scripts/preflight.sh"
+mv "$T/etc/compose.env" "$T/etc/compose.env.moved"
+expect 1 "preflight rejects a missing compose settings file" "$scripts/preflight.sh"
+rm -f "$T/etc/compose.env.moved"
+cp "$T/etc/compose.env.bak" "$T/etc/compose.env"
 
 echo "== release checksums"
 expect 0 "verify-release accepts the build" "$scripts/verify-release.sh" "$ROKH_RELEASE_DIR"

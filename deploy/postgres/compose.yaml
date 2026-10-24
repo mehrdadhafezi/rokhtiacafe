@@ -8,15 +8,21 @@
 #
 # The port is published on 127.0.0.1 only: the rokh service on the host connects to
 # 127.0.0.1:${ROKH_PG_PORT}; nothing outside the host can reach PostgreSQL.
-# The ROKH_PG_* variables exist so tests can run a disposable copy; production keeps the defaults.
+#
+# ROKH_PG_PORT and ROKH_PG_IMAGE have NO defaults: Compose refuses to start without them, so a
+# forgotten setting can never publish a port another service uses. In production they live in
+# /opt/rokh/postgres/.env (template deploy/env/compose.env.example), which Compose reads from the
+# project directory; a variable exported in the calling shell overrides that file
+# (deploy/README.md §4.1). The other ROKH_PG_* variables exist so tests can run a disposable copy;
+# production keeps their defaults.
 name: rokh
 
 services:
   postgres:
-    # Pin the exact image digest at install time (docker compose pull, then record
-    # `docker image inspect --format '{{index .RepoDigests 0}}'` in ROKH_PG_IMAGE). Debian-based:
-    # glibc collations stay stable across minor updates. Major upgrades: deploy/README.md §12.
-    image: ${ROKH_PG_IMAGE:-postgres:16-bookworm}
+    # Exact image, pinned by digest: ROKH_PG_IMAGE=postgres:16-bookworm@sha256:<64 hex>
+    # (procedure: deploy/README.md §4.1). Debian-based: glibc collations stay stable across minor
+    # updates. Major upgrades: deploy/README.md §4.3.
+    image: "${ROKH_PG_IMAGE:?set ROKH_PG_IMAGE in /opt/rokh/postgres/.env (deploy/README.md 4.1)}"
     container_name: ${ROKH_PG_CONTAINER:-rokh-postgres}
     hostname: rokh-postgres
     restart: unless-stopped
@@ -41,8 +47,9 @@ services:
       - log_min_duration_statement=1000
       - -c
       - log_connections=off
+    # Loopback only. No default port: it is a deployment decision recorded in /opt/rokh/postgres/.env.
     ports:
-      - "127.0.0.1:${ROKH_PG_PORT:-15432}:5432"
+      - "127.0.0.1:${ROKH_PG_PORT:?set ROKH_PG_PORT in /opt/rokh/postgres/.env (deploy/README.md 4.1)}:5432"
     networks:
       - rokh-db
     volumes:
