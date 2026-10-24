@@ -36,7 +36,7 @@ to the push services) that were never run.
 |---|---|---|
 | P1 | Run on the existing cPanel/WHM host, not a VPS. | Root/WHM access gives systemd and Docker; F5 proves the proxy mechanism. |
 | P2 | `rokh` as a systemd service (`deploy/systemd/rokh.service`), dedicated system user `rokh`, layout under `/opt/rokh`, `/etc/rokh`, `/var/lib/rokh`. | Supervised restarts, hardening, no cPanel-account coupling. |
-| P3 | PostgreSQL 16 in its own Docker Compose project (`rokh`), published on `127.0.0.1:15432` only, roles `rokh_owner` / `rokh_app` from the shared `roles.sql`. | Dedicated instance (F9); no public port; same role model as CI. |
+| P3 | PostgreSQL 16 in its own Docker Compose project (`rokh`), published on `127.0.0.1` only, on the port set by `ROKH_PG_PORT` (no default; 15433 proposed in LRA-2 because 15432 is used by an unrelated service), roles `rokh_owner` / `rokh_app` from the shared `roles.sql`. | Dedicated instance (F9); no public port; same role model as CI. |
 | P4 | LiteSpeed reaches rokh through two domain-specific userdata includes (`deploy/litespeed/`); plain HTTP only redirects. | No global configuration changes (F4). |
 | P5 | Start with `TRUSTED_PROXIES=127.0.0.1`. Add the MizbanCloud edge ranges only after R1 is verified. | Smallest trust set, but spoof resistance depends on LiteSpeed appending the real peer (R1, unverified). Until measured, client IPs are not relied on for anything but loose rate limits. |
 | P6 | Backups as root to `/backup/rokh` (required mount), 14 days / at least 7 sets, plus encrypted off-site copies pulled by the owner. | Root disk nearly full (F8); Docker volumes are not in cPanel backups. |
@@ -65,7 +65,7 @@ to the push services) that were never run.
 3. R1 and R2 resolved, or explicitly accepted by the owner in writing.
 4. MizbanCloud: cache bypass rule for `/api/*`, `/admin/*`, HTML; TLS mode full/strict; upload
    limit ≥ 4 MB; origin timeout ≥ 30 s.
-5. Free ports `127.0.0.1:18080` and `127.0.0.1:15432`; disk capacity accepted under §6.1 (the
+5. Free ports `127.0.0.1:18080` and `127.0.0.1:ROKH_PG_PORT` (15433 proposed, not reserved); disk capacity accepted under §6.1 (the
    5 GB figure there is only a technical lower bound for Rokh, not an approval threshold).
 6. Docker Engine and Compose v2 on the server (owner/host confirms; installing them is a server
    change needing approval).

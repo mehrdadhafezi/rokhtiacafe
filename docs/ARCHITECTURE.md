@@ -163,7 +163,8 @@ RTL: use logical utilities only (`ms-/me-/ps-/pe-/start-/end-`); numbers rendere
 Target (decision D1, [HOSTING-ASSESSMENT.md](HOSTING-ASSESSMENT.md)): the existing cPanel/WHM
 server (AlmaLinux 8, LiteSpeed) behind the MizbanCloud CDN. MizbanCloud edge → LiteSpeed
 (domain-specific userdata include) → `rokh serve` on `127.0.0.1:18080` under systemd as user
-`rokh` → dedicated PostgreSQL 16 in Docker on `127.0.0.1:15432`. Production stays NO-GO until the
+`rokh` → dedicated PostgreSQL 16 in Docker on `127.0.0.1:${ROKH_PG_PORT}` (proposed 15433; 15432 is used by
+another service on the server). Production stays NO-GO until the
 release gate in HOSTING-ASSESSMENT §6 is approved.
 
 Build artifact: `rokh` Linux amd64 static binary with embedded SPA + migrations.

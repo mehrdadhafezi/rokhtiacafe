@@ -22,7 +22,7 @@ chmod 600 "$tmp/postgres.env"
 native() { if command -v cygpath > /dev/null; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 command -v cygpath > /dev/null && export MSYS_NO_PATHCONV=1 # Git Bash on Windows
 export ROKH_PG_CONTAINER="rokh-$id-pg" ROKH_PG_VOLUME="rokh-$id-pgdata" ROKH_PG_NETWORK="rokh-$id-net" \
-  ROKH_PG_PORT="$port"
+  ROKH_PG_PORT="$port" ROKH_PG_IMAGE="${TEST_PG_IMAGE:-postgres:16-bookworm}"
 ROKH_PG_ENV_FILE="$(native "$tmp/postgres.env")"
 export ROKH_PG_ENV_FILE
 dc() { docker compose -p "rokh-$id" -f "$(native "$tmp/compose.yaml")" "$@"; }

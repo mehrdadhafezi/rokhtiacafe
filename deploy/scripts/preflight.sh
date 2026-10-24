@@ -53,6 +53,30 @@ else
   fail "DATABASE_URL and MIGRATION_DATABASE_URL point at different databases"
 fi
 
+# 2b. The PostgreSQL compose settings (deploy/README.md §4.1): the published port is the one the
+# database URLs use, and the image is pinned by digest. Compose has no defaults for either.
+compose_env="$(opt ROKH_COMPOSE_ENV_FILE /opt/rokh/postgres/.env)"
+if [ ! -f "$compose_env" ]; then
+  fail "$compose_env is missing (ROKH_PG_PORT, ROKH_PG_IMAGE; template deploy/env/compose.env.example)"
+elif [ -n "$(find "$compose_env" -maxdepth 0 -perm -o+w)" ]; then
+  fail "$compose_env is world-writable (want root:root 600)"
+else
+  pg_port="$(env_get "$compose_env" ROKH_PG_PORT)"
+  pg_image="$(env_get "$compose_env" ROKH_PG_IMAGE)"
+  if ! [[ $pg_port =~ ^[1-9][0-9]{3,4}$ ]] || [ "$pg_port" -gt 65535 ]; then
+    fail "ROKH_PG_PORT in $compose_env must be a port number 1024-65535, got '$pg_port'"
+  elif [ "$APP_HOST:$APP_PORT" != "127.0.0.1:$pg_port" ]; then
+    fail "DATABASE_URL points at $APP_HOST:$APP_PORT, but compose publishes 127.0.0.1:$pg_port ($compose_env)"
+  else
+    pass "PostgreSQL published on 127.0.0.1:$pg_port, as the database URLs expect"
+  fi
+  if [[ $pg_image =~ ^postgres:16[A-Za-z0-9._-]*@sha256:[0-9a-f]{64}$ ]]; then
+    pass "PostgreSQL image pinned by digest"
+  else
+    fail "ROKH_PG_IMAGE in $compose_env is not pinned (want postgres:16-…@sha256:<64 hex>)"
+  fi
+fi
+
 # 3. rokh loads ./.env and ../.env from its working directory: none may exist where it runs.
 if [ -e /.env ]; then fail "stray /.env would be loaded by rokh"; else pass "no stray /.env"; fi
 

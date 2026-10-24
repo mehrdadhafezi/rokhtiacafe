@@ -7,7 +7,7 @@
 #   /etc/rokh/rokh.env           root:rokh 640    runtime settings and secrets
 #   /var/lib/rokh                root:rokh 750    working directory (contains no .env)
 #   /var/lib/rokh/uploads        rokh:rokh 750    product images: the only writable path
-# PostgreSQL runs in Docker (deploy/postgres/compose.yaml) and is reached on 127.0.0.1:15432, so
+# PostgreSQL runs in Docker (deploy/postgres/compose.yaml) and is reached on 127.0.0.1:ROKH_PG_PORT, so
 # there is no dependency on a host postgresql.service. If the database is not up yet, rokh exits,
 # and systemd retries every 5 s without giving up.
 [Unit]

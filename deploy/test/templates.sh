@@ -19,6 +19,8 @@ env_prod="$d/env/production.env.example"
 env_mig="$d/env/migrate.env.example"
 env_ops="$d/env/ops.env.example"
 env_pg="$d/env/postgres.env.example"
+env_cmp="$d/env/compose.env.example"
+init="$d/local/postgres/10-rokh-init.sh"
 compose="$d/postgres/compose.yaml"
 unit="$d/systemd/rokh.service"
 ssl="$d/litespeed/rokh-proxy.ssl.conf.example"
@@ -50,7 +52,12 @@ check "LiteSpeed include sets no security headers" sh -c "! grep -Eiq '^[[:space
 check "plain HTTP is redirected, never proxied" sh -c "grep -q 'R=301' '$std' && ! grep -q ProxyPass '$std'"
 check "plain HTTP keeps /.well-known/" grep -q '!\^/\\.well-known/' "$std"
 check "Caddy fallback proxies to HTTP_ADDR" grep -q "reverse_proxy $addr\$" "$d/caddy/Caddyfile"
-pg_port="$(grep -Eo '127\.0\.0\.1:\$\{ROKH_PG_PORT:-[0-9]+\}:5432' "$compose" | grep -Eo ':-[0-9]+' | tr -d ':-')"
+pg_port="$(val "$env_cmp" ROKH_PG_PORT)"
+check "compose has no default PostgreSQL port" sh -c "grep -q 'ROKH_PG_PORT:?' '$compose' && ! grep -q 'ROKH_PG_PORT:-' '$compose'"
+check "compose has no default PostgreSQL image" sh -c "grep -q 'ROKH_PG_IMAGE:?' '$compose' && ! grep -q 'ROKH_PG_IMAGE:-' '$compose'"
+check "compose env template sets a numeric port" sh -c "echo '$pg_port' | grep -Eq '^[1-9][0-9]{3,4}\$'"
+check "compose env template pins postgres:16-bookworm by digest" grep -Eq '^ROKH_PG_IMAGE=postgres:16-bookworm@sha256:CHANGE_ME$' "$env_cmp"
+check "ops template points preflight at /opt/rokh/postgres/.env" test "$(val "$env_ops" ROKH_COMPOSE_ENV_FILE)" = /opt/rokh/postgres/.env
 check "compose publishes PostgreSQL on 127.0.0.1 only" sh -c "grep -A2 '^    ports:' '$compose' | grep -E '^ +- ' | grep -vq '\"127\.0\.0\.1:'; [ \$? -ne 0 ]"
 check "DATABASE_URL uses the compose port $pg_port" sh -c "val() { grep -E \"^\$2=\" \"\$1\" | cut -d= -f2-; }; val '$env_prod' DATABASE_URL | grep -q '@127.0.0.1:$pg_port/rokhtiacafe?'"
 check "MIGRATION_DATABASE_URL uses the same server and database" \
@@ -62,6 +69,11 @@ check "APP_BASE_URL is https://rokh.tiacafe.ir" test "$(val "$env_prod" APP_BASE
 check "UPLOAD_DIR is absolute" sh -c "val() { grep -E \"^\$2=\" \"\$1\" | cut -d= -f2-; }; val '$env_prod' UPLOAD_DIR | grep -q '^/'"
 check "BACKUP_DIR is on /backup" test "$(val "$env_ops" BACKUP_DIR)" = /backup/rokh
 check "BACKUP_REQUIRE_MOUNT is /backup" test "$(val "$env_ops" BACKUP_REQUIRE_MOUNT)" = /backup
+check "BACKUP_MIN_FREE_MB keeps the documented /backup reserve (>= 84480)" test "$(val "$env_ops" BACKUP_MIN_FREE_MB)" -ge 84480
+
+echo "== database bootstrap"
+check "init script passes no password on the command line" sh -c "! grep -Eq -- '-v +[a-z_]*=' '$init'"
+check "init script reads the values with \\getenv" sh -c "grep -q 'getenv owner_password ROKH_OWNER_PASSWORD' '$init' && grep -q 'getenv app_password ROKH_APP_PASSWORD' '$init' && grep -q 'getenv db_name ROKH_DB_NAME' '$init'"
 
 echo "== backup scheduling"
 readme="$d/README.md"
@@ -102,13 +114,18 @@ check "APP_SECRET_KEY and VAPID_PRIVATE_KEY are empty" sh -c "grep -qx 'APP_SECR
 echo "== compose"
 if docker compose version > /dev/null 2>&1; then
   tmpe="$(mktemp)"
+  tmpc="$(mktemp)"
   cp "$env_pg" "$tmpe"
-  check "docker compose config is valid" env ROKH_PG_ENV_FILE="$tmpe" docker compose -f "$compose" config --quiet
-  rm -f "$tmpe"
+  sed "s#@sha256:CHANGE_ME#@sha256:$(printf '%064d' 0)#" "$env_cmp" > "$tmpc"
+  check "docker compose config is valid" env -u ROKH_PG_PORT -u ROKH_PG_IMAGE ROKH_PG_ENV_FILE="$tmpe" \
+    docker compose --env-file "$tmpc" -f "$compose" config --quiet
+  check "docker compose refuses to run without ROKH_PG_PORT" sh -c "! env -u ROKH_PG_PORT ROKH_PG_IMAGE=postgres:16-bookworm ROKH_PG_ENV_FILE='$tmpe' docker compose -f '$compose' config --quiet > /dev/null 2>&1"
+  check "docker compose refuses to run without ROKH_PG_IMAGE" sh -c "! env -u ROKH_PG_IMAGE ROKH_PG_PORT=15433 ROKH_PG_ENV_FILE='$tmpe' docker compose -f '$compose' config --quiet > /dev/null 2>&1"
+  rm -f "$tmpe" "$tmpc"
 else
   echo "SKIP  docker compose not available"
 fi
-check "compose uses PostgreSQL 16" grep -q 'postgres:16' "$compose"
+check "compose uses PostgreSQL 16" grep -q '^ROKH_PG_IMAGE=postgres:16' "$env_cmp"
 check "compose has a health check" grep -q 'healthcheck:' "$compose"
 check "compose restarts the container" grep -q 'restart: unless-stopped' "$compose"
 check "compose caps container logs" grep -q 'max-size:' "$compose"
