@@ -61,27 +61,21 @@ CREATE TRIGGER customer_events_no_delete
 CREATE TRIGGER customer_events_no_truncate
   BEFORE TRUNCATE ON customer_events FOR EACH STATEMENT EXECUTE FUNCTION forbid_delete();
 
--- Null means a historic/anonymous order. Attribution is set atomically at
--- order creation, not inferred by matching a name, phone or device identifier.
-ALTER TABLE orders ADD COLUMN customer_id bigint REFERENCES customers(id) ON DELETE RESTRICT;
-CREATE INDEX orders_customer_history_idx ON orders (customer_id, created_at DESC, id DESC)
-  WHERE customer_id IS NOT NULL;
-CREATE INDEX orders_customer_completed_idx ON orders (customer_id, completed_at DESC)
-  WHERE customer_id IS NOT NULL AND status = 'COMPLETED';
+-- Link authenticated customer orders without altering the protected orders table.
+-- The app inserts one link in the same transaction as order creation.
+-- Historic and anonymous orders have no row in this table.
+CREATE TABLE customer_order_links (
+  order_id       bigint PRIMARY KEY REFERENCES orders(id) ON DELETE RESTRICT,
+  customer_id    bigint NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX customer_order_links_customer_idx
+  ON customer_order_links (customer_id, order_id DESC);
 
--- Never transfer an order between customers, including after completion.
--- Any future anonymous-order claim must have its own explicit verification flow
--- and reviewed exception, rather than bypassing this invariant.
--- +goose StatementBegin
-CREATE FUNCTION forbid_order_customer_reassignment() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  IF NEW.customer_id IS DISTINCT FROM OLD.customer_id THEN
-    RAISE EXCEPTION 'orders: customer attribution is immutable (order %)', OLD.id
-      USING ERRCODE = 'RK002';
-  END IF;
-  RETURN NEW;
-END $$;
--- +goose StatementEnd
-
-CREATE TRIGGER orders_customer_attribution_guard
-  BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION forbid_order_customer_reassignment();
+-- Attribution is append-only: never transfer a customer's purchase.
+CREATE TRIGGER customer_order_links_no_update
+  BEFORE UPDATE ON customer_order_links FOR EACH ROW EXECUTE FUNCTION forbid_update();
+CREATE TRIGGER customer_order_links_no_delete
+  BEFORE DELETE ON customer_order_links FOR EACH ROW EXECUTE FUNCTION forbid_delete();
+CREATE TRIGGER customer_order_links_no_truncate
+  BEFORE TRUNCATE ON customer_order_links FOR EACH STATEMENT EXECUTE FUNCTION forbid_delete();
