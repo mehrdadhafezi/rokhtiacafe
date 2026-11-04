@@ -117,3 +117,15 @@ No `migrate up`, production restart, live table modification, or deployment is a
   `0098`; invalid phones are charged to the per-IP limit only.
 - **Backward compatibility:** no new migration; `00008` is unchanged. The previous binary ignores the
   customer tables; guest orders, tracking tokens and their hashes are unchanged.
+- **PR #19 audit remediation (F-01..F-03):**
+  - *F-01:* `GET /admin/customers/{id}` totals no longer expose `paid_rial` (the sum of
+    `orders.paid_rial`, which a refund never reduces, labelled as "net"). They now report
+    `payments_received_rial` and `refunds_recorded_rial` from non-void `payments` rows and
+    `net_collected_rial` = received − refunded, the same definitions as the customer report, all time.
+  - *F-02:* the customer session has four states: loading, guest (only a 401 from `/customer/auth/me`
+    or a logout), customer, and error (any other failure after two automatic retries). In the error
+    state checkout and private pages wait with a "try again" action; a signed-in browser is never
+    shown as a guest. A `403 CSRF_FAILED` at checkout re-checks the session.
+  - *F-03:* open orders and receivables are point in time and not limited to the range; the customer
+    report lists every customer with activity in the range, a receivable now or an open order now
+    (including orders created before the range).

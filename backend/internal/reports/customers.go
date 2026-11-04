@@ -27,7 +27,7 @@ var CustomerDefinitions = map[string]string{
 	"orders_placed":           "orders the customer created in the range, any status",
 	"completed_orders":        "orders completed in the range",
 	"cancelled_orders":        "orders cancelled in the range (never revenue)",
-	"open_orders":             "orders pending, preparing or ready now (point in time)",
+	"open_orders":             "orders pending, preparing or ready now (point in time: counts orders created before the range too)",
 	"gross_sales_rial":        "totals of orders completed in the range (revenue is recognised at completion)",
 	"sales_refunds_rial":      "refund rows of completed orders recorded in the range",
 	"revenue_rial":            "gross sales minus sales refunds",
@@ -35,7 +35,7 @@ var CustomerDefinitions = map[string]string{
 	"payments_received_rial":  "non-void payments recorded in the range",
 	"refunds_recorded_rial":   "all non-void refund rows recorded in the range",
 	"net_collected_rial":      "payments received minus refunds recorded",
-	"receivable_rial":         "completed, unrefunded orders not fully paid (point in time)",
+	"receivable_rial":         "completed, unrefunded orders not fully paid (point in time: not limited to the range)",
 }
 
 // CustomerFigures are one customer's (or the total's) figures for a range.

@@ -283,8 +283,14 @@ export function CustomerDetailPage() {
         <Stat label="بازپرداخت سفارش‌های تحویل‌شده">
           <Money rial={t.completed_refunded_rial} tone={t.completed_refunded_rial ? 'danger' : undefined} />
         </Stat>
-        <Stat label="مبالغ پرداخت‌شده" hint="خالص پرداخت‌ها روی همهٔ سفارش‌ها">
-          <Money rial={t.paid_rial} />
+        <Stat label="پرداخت دریافتی (ناخالص)" hint="پرداخت‌های باطل‌نشده، پیش از کسر بازپرداخت">
+          <Money rial={t.payments_received_rial} />
+        </Stat>
+        <Stat label="بازپرداخت ثبت‌شده" hint="بازپرداخت سفارش‌های تحویل‌شده و پیش‌پرداخت سفارش‌های لغوشده">
+          <Money rial={t.refunds_recorded_rial} tone={t.refunds_recorded_rial ? 'danger' : undefined} />
+        </Stat>
+        <Stat label="خالص دریافتی" hint="پرداخت دریافتی منهای بازپرداخت ثبت‌شده">
+          <Money rial={t.net_collected_rial} />
         </Stat>
         <Stat label="مطالبات (اکنون)" hint="تحویل‌شده، بدون بازپرداخت و کامل پرداخت‌نشده">
           <Money rial={t.receivable_rial} tone={t.receivable_rial ? 'danger' : undefined} />
@@ -329,6 +335,7 @@ const columns: { key: keyof CustomerFigures; label: string; money?: boolean; ton
   { key: 'orders_placed', label: 'سفارش ثبت‌شده' },
   { key: 'completed_orders', label: 'تحویل‌شده' },
   { key: 'cancelled_orders', label: 'لغوشده' },
+  { key: 'open_orders', label: 'باز (اکنون)' },
   { key: 'gross_sales_rial', label: 'فروش ناخالص', money: true },
   { key: 'sales_refunds_rial', label: 'بازپرداخت فروش', money: true, tone: 'danger' },
   { key: 'revenue_rial', label: 'درآمد', money: true },
@@ -345,7 +352,9 @@ const definitionsFa: [string, string][] = [
   ['دریافتی', 'پرداخت‌های باطل‌نشدهٔ ثبت‌شده در بازه (نقدی و کارتخوان).'],
   ['بازپرداخت ثبت‌شده', 'همهٔ بازپرداخت‌های ثبت‌شده در بازه، از جمله پیش‌پرداخت سفارش‌های لغوشده (که هرگز درآمد نیستند).'],
   ['خالص دریافتی', 'دریافتی منهای بازپرداخت ثبت‌شده.'],
-  ['مطالبات', 'سفارش‌های تحویل‌شدهٔ بدون بازپرداخت که هنوز کامل پرداخت نشده‌اند، در لحظهٔ گزارش.'],
+  ['مطالبات', 'سفارش‌های تحویل‌شدهٔ بدون بازپرداخت که هنوز کامل پرداخت نشده‌اند، در لحظهٔ گزارش؛ به بازه محدود نیست.'],
+  ['باز (اکنون)', 'سفارش‌های در انتظار، در حال آماده‌سازی یا آماده، در لحظهٔ گزارش؛ به بازه محدود نیست و سفارش‌های ثبت‌شده پیش از بازه را هم می‌شمارد.'],
+  ['فهرست مشتریان', 'هر مشتری که در بازه فعالیت داشته یا اکنون مطالبات یا سفارش باز دارد.'],
   ['انتساب', 'فقط سفارش‌هایی که هنگام ثبت به حساب مشتری متصل شده‌اند؛ سفارش‌های مهمان در این گزارش نیستند.'],
 ]
 

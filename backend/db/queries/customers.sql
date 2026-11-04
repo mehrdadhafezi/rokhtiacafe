@@ -80,15 +80,23 @@ FROM customers c WHERE c.id = $1;
 
 -- name: AdminCustomerTotals :one
 -- All-time, point-in-time figures for one customer (same definitions as the summary report).
+-- Money received and returned comes from the payment ledger (non-void PAYMENT / REFUND rows), never
+-- from orders.paid_rial: paid_rial is not reduced by a refund (refunded_rial = paid_rial instead), so
+-- summing it would count refunded money as collected.
 SELECT count(*)::int8 AS orders,
        count(*) FILTER (WHERE o.status = 'COMPLETED')::int8 AS completed_orders,
        count(*) FILTER (WHERE o.status = 'CANCELLED')::int8 AS cancelled_orders,
        count(*) FILTER (WHERE o.status IN ('PENDING', 'PREPARING', 'READY'))::int8 AS open_orders,
        COALESCE(sum(o.total_rial) FILTER (WHERE o.status = 'COMPLETED'), 0)::int8 AS completed_gross_rial,
        COALESCE(sum(o.refunded_rial) FILTER (WHERE o.status = 'COMPLETED'), 0)::int8 AS completed_refunded_rial,
-       COALESCE(sum(o.paid_rial), 0)::int8 AS paid_rial,
        COALESCE(sum(o.total_rial - o.paid_rial) FILTER (
-         WHERE o.status = 'COMPLETED' AND o.refunded_rial = 0 AND o.paid_rial < o.total_rial), 0)::int8 AS receivable_rial
+         WHERE o.status = 'COMPLETED' AND o.refunded_rial = 0 AND o.paid_rial < o.total_rial), 0)::int8 AS receivable_rial,
+       (SELECT COALESCE(sum(p.amount_rial), 0)
+          FROM customer_order_links pl JOIN payments p ON p.order_id = pl.order_id
+         WHERE pl.customer_id = $1 AND p.kind = 'PAYMENT' AND p.voided_at IS NULL)::int8 AS payments_received_rial,
+       (SELECT COALESCE(sum(p.amount_rial), 0)
+          FROM customer_order_links pl JOIN payments p ON p.order_id = pl.order_id
+         WHERE pl.customer_id = $1 AND p.kind = 'REFUND' AND p.voided_at IS NULL)::int8 AS refunds_recorded_rial
 FROM customer_order_links l
 JOIN orders o ON o.id = l.order_id
 WHERE l.customer_id = $1;
@@ -109,8 +117,9 @@ LIMIT @row_limit;
 -- gross sales = totals of orders COMPLETED in the range; sales refunds = non-void REFUND rows of
 -- COMPLETED orders created in the range; prepayment refunds = REFUND rows of CANCELLED orders;
 -- payments received / refunds recorded = non-void PAYMENT / REFUND rows created in the range.
--- Receivables and open orders are point in time (now). Only customers with activity in the
--- range or an outstanding amount are returned.
+-- Receivables and open orders are point in time (now), whatever the range. A customer is listed
+-- when they have activity in the range or anything outstanding now (a receivable or an open order),
+-- so the point-in-time columns of the totals cover every customer they count.
 WITH ord AS (
   SELECT l.customer_id,
          count(*) FILTER (WHERE o.created_at >= @from_ts AND o.created_at < @to_ts) AS orders_placed,
@@ -153,6 +162,7 @@ LEFT JOIN pay ON pay.customer_id = c.id
 WHERE COALESCE(ord.orders_placed, 0) + COALESCE(ord.completed_orders, 0) + COALESCE(ord.cancelled_orders, 0) > 0
    OR pay.customer_id IS NOT NULL
    OR COALESCE(ord.receivable, 0) > 0
+   OR COALESCE(ord.open_orders, 0) > 0
 ORDER BY gross_sales_rial DESC, c.id
 LIMIT @row_limit;
 

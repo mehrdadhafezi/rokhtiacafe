@@ -14,6 +14,9 @@ type Querier interface {
 	AcceptOrder(ctx context.Context, arg AcceptOrderParams) (Order, error)
 	AddOrderPaid(ctx context.Context, arg AddOrderPaidParams) (Order, error)
 	// All-time, point-in-time figures for one customer (same definitions as the summary report).
+	// Money received and returned comes from the payment ledger (non-void PAYMENT / REFUND rows), never
+	// from orders.paid_rial: paid_rial is not reduced by a refund (refunded_rial = paid_rial instead), so
+	// summing it would count refunded money as collected.
 	AdminCustomerTotals(ctx context.Context, customerID int64) (AdminCustomerTotalsRow, error)
 	AdminGetCustomer(ctx context.Context, id int64) (AdminGetCustomerRow, error)
 	// One customer's orders created in [@from_ts, @to_ts), newest first, every status.
@@ -179,8 +182,9 @@ type Querier interface {
 	// gross sales = totals of orders COMPLETED in the range; sales refunds = non-void REFUND rows of
 	// COMPLETED orders created in the range; prepayment refunds = REFUND rows of CANCELLED orders;
 	// payments received / refunds recorded = non-void PAYMENT / REFUND rows created in the range.
-	// Receivables and open orders are point in time (now). Only customers with activity in the
-	// range or an outstanding amount are returned.
+	// Receivables and open orders are point in time (now), whatever the range. A customer is listed
+	// when they have activity in the range or anything outstanding now (a receivable or an open order),
+	// so the point-in-time columns of the totals cover every customer they count.
 	ReportCustomers(ctx context.Context, arg ReportCustomersParams) ([]ReportCustomersRow, error)
 	// Estimated cost of wasted made-to-order items (information only, never in the operating result).
 	ReportEstimatedWasteByDay(ctx context.Context, arg ReportEstimatedWasteByDayParams) ([]ReportEstimatedWasteByDayRow, error)

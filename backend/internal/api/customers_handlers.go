@@ -314,7 +314,10 @@ func (a *API) getCustomer(w http.ResponseWriter, r *http.Request) {
 			"open_orders": t.OpenOrders, "completed_gross_rial": t.CompletedGrossRial,
 			"completed_refunded_rial": t.CompletedRefundedRial,
 			"completed_revenue_rial":  t.CompletedGrossRial - t.CompletedRefundedRial,
-			"paid_rial":               t.PaidRial, "receivable_rial": t.ReceivableRial},
+			"receivable_rial":         t.ReceivableRial,
+			// From the payment ledger: refunds are subtracted, voided rows are ignored.
+			"payments_received_rial": t.PaymentsReceivedRial, "refunds_recorded_rial": t.RefundsRecordedRial,
+			"net_collected_rial": t.PaymentsReceivedRial - t.RefundsRecordedRial},
 	})
 }
 
@@ -408,7 +411,7 @@ var customerDefinitionsFA = [][2]string{
 	{"سفارش ثبت‌شده", "سفارش‌هایی که مشتری در بازه ثبت کرده، با هر وضعیت"},
 	{"سفارش تکمیل‌شده", "سفارش‌هایی که در بازه تکمیل شده‌اند"},
 	{"سفارش لغوشده", "سفارش‌هایی که در بازه لغو شده‌اند (هرگز درآمد نیستند)"},
-	{"سفارش باز", "سفارش‌های در انتظار، در حال آماده‌سازی یا آماده، در لحظهٔ گزارش"},
+	{"سفارش باز", "سفارش‌های در انتظار، در حال آماده‌سازی یا آماده، در لحظهٔ گزارش؛ به بازه محدود نیست و سفارش‌های ثبت‌شده پیش از بازه را هم می‌شمارد"},
 	{"فروش ناخالص", "جمع مبلغ سفارش‌هایی که در بازه تکمیل شده‌اند (درآمد در زمان تکمیل شناسایی می‌شود)"},
 	{"بازپرداخت فروش", "ردیف‌های بازپرداخت سفارش‌های تکمیل‌شده که در بازه ثبت شده‌اند"},
 	{"درآمد", "فروش ناخالص منهای بازپرداخت فروش"},
@@ -416,7 +419,7 @@ var customerDefinitionsFA = [][2]string{
 	{"پرداخت دریافتی", "پرداخت‌های باطل‌نشدهٔ ثبت‌شده در بازه"},
 	{"بازپرداخت ثبت‌شده", "همهٔ ردیف‌های بازپرداخت باطل‌نشدهٔ ثبت‌شده در بازه"},
 	{"خالص دریافتی", "پرداخت دریافتی منهای بازپرداخت ثبت‌شده"},
-	{"مطالبات", "سفارش‌های تکمیل‌شدهٔ بدون بازپرداخت که کامل پرداخت نشده‌اند، در لحظهٔ گزارش"},
+	{"مطالبات", "سفارش‌های تکمیل‌شدهٔ بدون بازپرداخت که کامل پرداخت نشده‌اند، در لحظهٔ گزارش؛ به بازه محدود نیست"},
 }
 
 func customerReportSheets(rep reports.CustomerReport) []export.Sheet {

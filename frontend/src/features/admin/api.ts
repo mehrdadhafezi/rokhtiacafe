@@ -416,8 +416,13 @@ export interface CustomerTotals {
   completed_gross_rial: number
   completed_refunded_rial: number
   completed_revenue_rial: number
-  paid_rial: number
   receivable_rial: number
+  /** Non-void PAYMENT rows of the customer's orders, before any refund. */
+  payments_received_rial: number
+  /** Non-void REFUND rows (sales refunds and cancelled-order prepayment refunds). */
+  refunds_recorded_rial: number
+  /** payments_received_rial − refunds_recorded_rial. */
+  net_collected_rial: number
 }
 
 export interface CustomerOrder {
