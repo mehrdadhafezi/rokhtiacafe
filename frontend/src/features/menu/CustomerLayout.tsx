@@ -1,6 +1,8 @@
 import { Link, Outlet, useLocation } from 'react-router'
 
-import { BagIcon, CupIcon } from '@/components/icons'
+import { BagIcon, CupIcon, UserIcon } from '@/components/icons'
+import { CustomerSessionProvider } from '@/features/account/session'
+import { useCustomerSession } from '@/features/account/session-context'
 import { CartProvider, useCart } from '@/features/cart/CartContext'
 import { cartCount } from '@/features/cart/cart'
 import { faDigits } from '@/lib/digits'
@@ -26,29 +28,55 @@ function HeaderCart() {
   )
 }
 
-/** Customer shell: brand header with cart shortcut; the cart state lives here for all /menu pages. */
+function HeaderAccount() {
+  const { state } = useCustomerSession()
+  const { pathname } = useLocation()
+  // Unknown identity (lookup failed): neither "ورود" nor a name; the page shows the retry.
+  if (state.status === 'loading' || state.status === 'error') return <span className="size-11" aria-hidden />
+  const signedIn = state.status === 'customer'
+  const to = signedIn ? '/menu/account' : '/menu/login'
+  const current = pathname.startsWith(to) || (signedIn && pathname.startsWith('/menu/my-orders'))
+  return (
+    <Link
+      to={to}
+      state={signedIn ? undefined : { from: pathname }}
+      aria-current={current ? 'page' : undefined}
+      className="flex h-11 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-primary transition hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      <UserIcon width={20} height={20} aria-hidden />
+      <span>{signedIn ? state.customer.first_name : 'ورود'}</span>
+    </Link>
+  )
+}
+
+/** Customer shell: brand header with account and cart shortcuts; the cart state lives here for all /menu pages. */
 export function CustomerLayout() {
   return (
-    <CartProvider>
-      <div className="mx-auto flex min-h-dvh max-w-lg flex-col">
-        <header className="sticky top-0 z-20 border-b border-border/70 bg-background/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-md">
-          <div className="flex h-14 items-center justify-between">
-            <Link to="/menu" className="flex items-center gap-2 rounded-md focus-visible:ring-[3px] focus-visible:ring-ring/50">
-              <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground">
-                <CupIcon width={20} height={20} />
-              </span>
-              <span className="leading-tight">
-                <span className="block text-lg font-extrabold text-primary">رخ تیا</span>
-                <span className="block text-xs text-muted-foreground">کافه</span>
-              </span>
-            </Link>
-            <HeaderCart />
-          </div>
-        </header>
-        <main className="flex-1 px-4 pt-4 pb-32">
-          <Outlet />
-        </main>
-      </div>
-    </CartProvider>
+    <CustomerSessionProvider>
+      <CartProvider>
+        <div className="mx-auto flex min-h-dvh max-w-lg flex-col">
+          <header className="sticky top-0 z-20 border-b border-border/70 bg-background/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-md">
+            <div className="flex h-14 items-center justify-between">
+              <Link to="/menu" className="flex items-center gap-2 rounded-md focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground">
+                  <CupIcon width={20} height={20} />
+                </span>
+                <span className="leading-tight">
+                  <span className="block text-lg font-extrabold text-primary">رخ تیا</span>
+                  <span className="block text-xs text-muted-foreground">کافه</span>
+                </span>
+              </Link>
+              <div className="flex items-center gap-1">
+                <HeaderAccount />
+                <HeaderCart />
+              </div>
+            </div>
+          </header>
+          <main className="flex-1 px-4 pt-4 pb-32">
+            <Outlet />
+          </main>
+        </div>
+      </CartProvider>
+    </CustomerSessionProvider>
   )
 }

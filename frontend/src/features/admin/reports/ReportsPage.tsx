@@ -11,6 +11,7 @@ import { formatToman } from '@/lib/money'
 import { cn } from '@/lib/utils'
 
 import { financeApi, type ByMethod, type Figures } from '../api'
+import { useAuth } from '../hooks'
 import { formatApiDate } from '../format'
 import { reportsKey } from '../keys'
 import { expenseCategoryLabel, inventoryModeLabel, paymentMethodLabel, type ExpenseCategory } from '../labels'
@@ -80,6 +81,7 @@ function MethodsTable({ t }: { t: Figures }) {
 }
 
 export function ReportsPage() {
+  const { can } = useAuth()
   const today = apiDateToJalali(todayApiDate())
   const [month, setMonth] = useState({ year: today.year, month: today.month })
   const [custom, setCustom] = useState<{ from: string; to: string } | null>(null)
@@ -104,7 +106,17 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="گزارش‌ها" description="ارقام بر پایهٔ روز کاری تهران؛ فروش هنگام تحویل سفارش ثبت می‌شود." />
+      <PageHeader
+        title="گزارش‌ها"
+        description="ارقام بر پایهٔ روز کاری تهران؛ فروش هنگام تحویل سفارش ثبت می‌شود."
+        actions={
+          can('customers.view') && (
+            <Button asChild variant="outline">
+              <Link to="/customers/report">گزارش خرید مشتریان</Link>
+            </Button>
+          )
+        }
+      />
 
       <Card className="space-y-3">
         <div className="flex items-center justify-between gap-2">

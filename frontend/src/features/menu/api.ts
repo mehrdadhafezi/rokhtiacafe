@@ -1,6 +1,7 @@
 /**
- * Public customer API (docs/API-CONTRACT.md §3). No cookies are needed; the order tracking
- * token travels only in the `X-Tracking-Token` header (SECURITY §10).
+ * Public customer API (docs/API-CONTRACT.md §3). Guests need no cookies; the order tracking
+ * token travels only in the `X-Tracking-Token` header (SECURITY §10). A signed-in customer's
+ * order carries the customer CSRF token (the session cookie identifies the account).
  */
 import { api } from '@/lib/api'
 
@@ -74,10 +75,15 @@ export const orderQueryKey = (token: string) => ['public', 'order', token] as co
 
 export const fetchMenu = (signal?: AbortSignal) => api.get<MenuResponse>('/public/menu', { signal })
 
-export const createOrder = (body: CreateOrderBody, idempotencyKey: string, clientId: string) =>
-  api.post<PublicOrder>('/public/orders', body, { headers: { 'Idempotency-Key': idempotencyKey, 'X-Client-Id': clientId } })
+/** `customerCsrf` is the signed-in customer's token, or null for a guest (never the staff token). */
+export const createOrder = (body: CreateOrderBody, idempotencyKey: string, clientId: string, customerCsrf: string | null) =>
+  api.post<PublicOrder>('/public/orders', body, {
+    headers: { 'Idempotency-Key': idempotencyKey, 'X-Client-Id': clientId },
+    csrf: customerCsrf,
+  })
 
 export const fetchOrder = (token: string, signal?: AbortSignal) =>
-  api.get<PublicOrder>('/public/order', { headers: { 'X-Tracking-Token': token }, signal })
+  api.get<PublicOrder>('/public/order', { headers: { 'X-Tracking-Token': token }, signal, csrf: null })
 
-export const cancelOrder = (token: string) => api.post<PublicOrder>('/public/order/cancel', undefined, { headers: { 'X-Tracking-Token': token } })
+export const cancelOrder = (token: string) =>
+  api.post<PublicOrder>('/public/order/cancel', undefined, { headers: { 'X-Tracking-Token': token }, csrf: null })

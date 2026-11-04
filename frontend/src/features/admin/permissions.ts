@@ -27,6 +27,8 @@ export type Action =
   | 'users.manage'
   | 'audit.view'
   | 'self.password'
+  /** Café customers' personal data, purchase history, customer reports and exports (ADMIN only). */
+  | 'customers.view'
 
 const operatorActions: ReadonlySet<Action> = new Set<Action>([
   'dashboard.view',
