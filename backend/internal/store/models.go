@@ -31,6 +31,45 @@ type Category struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type Customer struct {
+	ID              int64
+	FirstName       string
+	LastName        string
+	Phone           string
+	PasswordHash    string
+	PhoneVerifiedAt pgtype.Timestamptz
+	IsActive        bool
+	LastLoginAt     pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+type CustomerEvent struct {
+	ID         int64
+	CustomerID int64
+	EventType  string
+	OrderID    pgtype.Int8
+	Ip         *netip.Addr
+	CreatedAt  pgtype.Timestamptz
+}
+
+type CustomerOrderLink struct {
+	OrderID    int64
+	CustomerID int64
+	CreatedAt  pgtype.Timestamptz
+}
+
+type CustomerSession struct {
+	TokenHash  []byte
+	CustomerID int64
+	CsrfToken  string
+	CreatedAt  pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	Ip         *netip.Addr
+	UserAgent  pgtype.Text
+}
+
 type Expense struct {
 	ID             int64
 	Category       string
