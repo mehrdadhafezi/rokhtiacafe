@@ -13,6 +13,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/customer"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/expenses"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
@@ -69,6 +70,9 @@ func New(d Deps) *API {
 		reports:   &reports.Service{Pool: d.Pool, Location: d.Location}}
 
 	r := chi.NewRouter()
+
+	// Customer identity has a separate cookie and never grants staff privileges.
+	r.Mount("/customer/auth", customer.New(d.Pool, d.Auth, a.clientIP).Handler())
 
 	// Public routes never read the session cookie, so browsing the menu cannot keep a staff
 	// session alive or touch the sessions table.
