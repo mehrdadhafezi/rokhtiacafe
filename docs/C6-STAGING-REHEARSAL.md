@@ -1,6 +1,6 @@
 # C6 — Staging release and rollback rehearsal (Rokh)
 
-**Status:** STARTED / NOT EXECUTED. This is a test specification for an isolated staging environment, not evidence of a successful rehearsal.
+**Status:** DEVELOPMENT/STAGING-EQUIVALENT ACCEPTANCE AUTOMATED AND EXECUTED on disposable PostgreSQL 16 and 17 with a **synthetic** pre-00008 dataset (see §7). No sanitized production backup was used, so restoration of real production data is NOT proven. Production remains NO-GO.
 **Base:** development merge `ec40c4ea80b455843361e6b18924de066fbff09b` (PR #19 → `feature/customer-accounts-history-reporting`).
 **Production release:** NO-GO until this rehearsal, R1 client-IP trust protection, privacy/retention and account-recovery decisions are separately accepted.
 **Hard restriction:** No live server services, shared LiteSpeed/WHM, CDN/DNS/firewall, production PostgreSQL or live uploads are to be modified by C6. Owner approval is required before any live-sourced backup is transferred or staging network service created.
@@ -80,3 +80,34 @@ Only report **C6 PASS** when 1–8 genuinely pass AND release blockers 9–10 ha
 - Extend disposable deploy rehearsal to verify the binary-only rollback against schema 00008 and retained customer data, including the older binary's compatibility. Do not run it against production.
 - Make evidence collection repeatable, security-safe and CI-visible.
 - Run and validate all workflows on the C6 branch; open a draft PR targeting `feature/customer-accounts-history-reporting` with actual evidence, not a claim of completed C6.
+
+## 7. Execution (PR #20)
+
+Everything below runs only against throwaway clusters (loopback/private addresses, random
+passwords, removed afterwards). Nothing touches a live server, database, upload directory, proxy,
+DNS or CDN.
+
+| Gate | How it runs | Where |
+|---|---|---|
+| 1–2, 8 Backup, restore, forward migration, binary rollback and roll-forward | `deploy/test/c6/in-docker.sh NEW OLD TOOL [EVIDENCE]`. The previous binary (`origin/main`) seeds legacy data. `backup.sh` takes the backup; `restore.sh` restores it with the C1–C5 binary, which applies `00008` and runs `rokh check`. The C1–C5, previous and C1–C5 binaries then run in turn against the migrated database. Row-digest snapshots S0–S5 and `rokh check` with both binaries are taken at every transition. | CI `c6-acceptance / rehearsal` (PG16, PG17); evidence artifact `c6-rehearsal-pg*` |
+| 3–5 Guest and customer ordering, idempotency (including the cross-binary replay), CSRF, isolation, ADMIN-only customer data, reconciliation with guest activity | HTTP phases of `backend/tools/c6`, plus the Go integration suite | the same jobs; `backend / test` |
+| 6 D/D+1 refund boundary (Asia/Tehran) | `deploy/test/clock/run.sh`: PostgreSQL with libfaketime and the server clocks moved together. `TestCrossDayRefundTehran` checks the summary and customer reports for D, D+1 and D..D+1. No row is rewritten and no trigger is disabled. | CI `backend / clock` (PG16, PG17) |
+| 7 Browser E2E and real XLSX/CSV | `scripts/e2e.sh` runs Playwright (`frontend/e2e`) on desktop and Pixel 7 against a release build and a new throwaway database | CI `c6-acceptance / e2e` |
+| 9 R1, CDN/proxy caching | NOT automatable here. The app sends `no-store` on customer/admin data (tested); the live CDN and proxy must be verified by the owner. R1 is still **BLOCKED**. | owner |
+| 10 Retention, OTP and account recovery | NOT implemented; owner decision required | owner |
+
+Run locally (Docker, Go, Node, Git Bash on Windows):
+
+```bash
+scripts/build-release.sh local                       # C1–C5 build → release/
+git worktree add --detach ../rokh-baseline origin/main && (cd ../rokh-baseline && scripts/build-release.sh baseline)
+(cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../release/c6-linux-amd64 ./tools/c6)
+deploy/test/c6/in-docker.sh release ../rokh-baseline/release release/c6-linux-amd64 /tmp/c6-evidence
+deploy/test/clock/run.sh                              # PG_MAJOR=17 for PostgreSQL 17
+TEST_DATABASE_ADMIN_URL=… MIGRATION_DATABASE_URL=… DATABASE_URL=… scripts/e2e.sh   # throwaway cluster prepared with roles.sql
+```
+
+Known limitations: the dataset is synthetic. The previous binary is `origin/main`, not a hash-verified
+copy of the binary actually deployed. The rehearsal runs inside a container rather than on a
+staging VM with LiteSpeed/CDN in front; the network edge (R1, caching) is outside its scope.
+
