@@ -389,6 +389,110 @@ export const usersApi = {
   resetPassword: (id: number, new_password: string) => api.post<void>(`/admin/users/${id}/password`, { new_password }),
 }
 
+// ---- customers (café clients, not staff users; ADMIN only) ----
+
+export interface AdminCustomer {
+  id: number
+  first_name: string
+  last_name: string
+  phone: string
+  /** Always false until SMS/OTP verification exists. */
+  phone_verified: boolean
+  is_active: boolean
+  created_at: string
+  last_login_at: string | null
+  orders: number
+  completed_orders: number
+  completed_gross_rial: number
+  completed_refunded_rial: number
+  last_order_at: string | null
+}
+
+export interface CustomerTotals {
+  orders: number
+  completed_orders: number
+  cancelled_orders: number
+  open_orders: number
+  completed_gross_rial: number
+  completed_refunded_rial: number
+  completed_revenue_rial: number
+  paid_rial: number
+  receivable_rial: number
+}
+
+export interface CustomerOrder {
+  id: number
+  order_number: number
+  business_date: string
+  status: OrderStatus
+  payment_status: PaymentStatus | ''
+  total_rial: number
+  paid_rial: number
+  refunded_rial: number
+  customer_label: string | null
+  customer_note: string | null
+  expired: boolean
+  created_at: string
+  completed_at: string | null
+  cancelled_at: string | null
+  cancel_reason: CancelReason | null
+  items: { name: string; quantity: number; unit_price_rial: number; line_total_rial: number }[]
+}
+
+export interface CustomerFigures {
+  orders_placed: number
+  completed_orders: number
+  cancelled_orders: number
+  open_orders: number
+  gross_sales_rial: number
+  sales_refunds_rial: number
+  revenue_rial: number
+  prepayment_refunds_rial: number
+  payments_received_rial: number
+  refunds_recorded_rial: number
+  net_collected_rial: number
+  receivable_rial: number
+}
+
+export interface CustomerReportRow extends CustomerFigures {
+  customer_id: number
+  first_name: string
+  last_name: string
+  phone: string
+}
+
+export interface CustomerReport {
+  from: string
+  to: string
+  timezone: string
+  customers: CustomerReportRow[]
+  totals: CustomerFigures
+  definitions: Record<keyof CustomerFigures, string>
+}
+
+export type ExportFormat = 'csv' | 'xlsx'
+
+export const customersApi = {
+  list: (search: string, beforeId: number | null, signal?: AbortSignal) => {
+    const q = new URLSearchParams({ limit: '50' })
+    if (search.trim()) q.set('search', search.trim())
+    if (beforeId) q.set('before_id', String(beforeId))
+    return api.get<Paged<AdminCustomer>>(`/admin/customers?${q}`, { signal })
+  },
+  get: (id: number, signal?: AbortSignal) =>
+    api.get<{ customer: AdminCustomer; totals: CustomerTotals }>(`/admin/customers/${id}`, { signal }),
+  orders: (id: number, from: string, to: string, beforeId: number | null, signal?: AbortSignal) =>
+    api.get<Paged<CustomerOrder> & { from: string; to: string }>(
+      `/admin/customers/${id}/orders?from=${from}&to=${to}&limit=50${beforeId ? `&before_id=${beforeId}` : ''}`,
+      { signal },
+    ),
+  report: (from: string, to: string, signal?: AbortSignal) => api.get<CustomerReport>(`/admin/reports/customers?from=${from}&to=${to}`, { signal }),
+  /** Same-origin download links: the browser sends the staff cookie; the server checks customers.view. */
+  reportExportUrl: (format: ExportFormat, from: string, to: string) => `/api/v1/admin/reports/customers.${format}?from=${from}&to=${to}`,
+  ordersExportUrl: (id: number, format: ExportFormat, from: string, to: string) =>
+    `/api/v1/admin/reports/customers/${id}/orders.${format}?from=${from}&to=${to}`,
+}
+
 // ---- web push ----
 
 export const pushApi = {

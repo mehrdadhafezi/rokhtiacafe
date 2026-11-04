@@ -19,6 +19,7 @@ describe('role permissions (mirror of internal/auth/policy.go)', () => {
       'ordering.toggle',
       'dashboard.revenue',
       'push.manage',
+      'customers.view',
     ] as const) {
       expect(can('OPERATOR', a)).toBe(false)
     }
@@ -26,6 +27,7 @@ describe('role permissions (mirror of internal/auth/policy.go)', () => {
 
   it('lets ADMIN do everything and nobody else anything', () => {
     expect(can('ADMIN', 'users.manage')).toBe(true)
+    expect(can('ADMIN', 'customers.view')).toBe(true)
     expect(can(undefined, 'orders.view')).toBe(false)
   })
 })
