@@ -9,7 +9,7 @@ This document and `00008_customer_accounts.sql` are the first additive developme
 - Customers of Rokh café, **not** sellers and not staff. Staff `ADMIN` / `OPERATOR` remain in the existing `users` and `sessions` tables.
 - Customer registers with first name, last name, Iranian mobile phone and a password; logs in with phone + password.
 - Name, phone and account activity are retained subject to a future approved data-retention/privacy policy.
-- All **new authenticated** orders receive an immutable `orders.customer_id` in the same creation transaction as the order and stock reservation.
+- All **new authenticated** orders receive one immutable row in `customer_order_links` in the same creation transaction as order creation and stock reservation.
 - Customer can see only their own order history, including ordered items, historical unit-price snapshots, current status and payment status.
 - Managers (ADMIN only) can view customer summaries, per-customer order details and export them. Reporting distinguishes completed sales, actual collected payments, refunds and cancelled orders.
 - Existing anonymous orders stay anonymous. Do not infer ownership from `customer_label`, device IDs, IP addresses or phone guesses; future claims require separate proof of ownership.
@@ -57,7 +57,7 @@ This document and `00008_customer_accounts.sql` are the first additive developme
 
 ## Reporting correctness
 
-- Use `orders.customer_id` as the only link. No `customer_label` matching.
+- Use `customer_order_links` joined by `orders.id = customer_order_links.order_id` as the only ownership link. No `customer_label` matching.
 - Completed sales: `orders.status = 'COMPLETED'` grouped by `completed_at` in Asia/Tehran; `total_rial` is **gross** sale.
 - Refunds: `refunded_rial` and payment ledger semantics must follow existing reports. A completed order can later be refunded, so distinguish historical gross sale from current refund state and date of refund.
 - Collected payments: derive from non-void payments and recorded refunds, not `total_rial`; never mislabel an unpaid completed order as money received.
@@ -71,7 +71,7 @@ This document and `00008_customer_accounts.sql` are the first additive developme
 2. Migration is forward-compatible with previous binary during rollout; no customer routes enabled until new binary passes CI.
 3. Duplicate phone registration is safe under concurrent requests; invalid mobile and weak password rejected.
 4. Customer A cannot read customer B's profile, activity or any order ID. Staff session is not a customer session.
-5. Order-create stores a customer ID only when the caller is authenticated, inside same transaction as stock reservation; guest ordering still works.
+5. Order-create inserts a `customer_order_links` row only when the caller is authenticated, inside the same transaction as stock reservation; guest ordering still works.
 6. Idempotency replay across accounts cannot transfer or reveal order ownership; all existing status transitions and financial protections pass.
 7. Personal activity logs retain event types/time but no secrets, tokens or raw authorization data.
 8. Admin CSV has authorization, bounds, formula-injection tests and matches database figures for completed/refunded/unpaid/cancelled orders.
