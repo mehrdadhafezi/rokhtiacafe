@@ -1,6 +1,8 @@
 # Customer accounts, order history and manager reporting — implementation contract
 
 Status: **Development / draft**. This is not deployed or approved for production.
+C1–C5 are implemented on the feature branches (C3–C5: `feat/c3-c5-customer-orders-ui-reports`);
+C6 release readiness, the R1 client-IP gate and staging rehearsals remain open.
 Baseline: `c468ffce27067af2714284b0a68034b0d9aa9d23`.
 This document and `00008_customer_accounts.sql` are the first additive development slice; they do **not** enable customer registration by themselves.
 
@@ -27,7 +29,7 @@ This document and `00008_customer_accounts.sql` are the first additive developme
 - Do not expose raw IP or User-Agent in customer UI or exports. Security activity history is a curated event log, not full access logs. Define retention and deletion/anonymization policy before public launch.
 - No plaintext credentials in files, deployment commands, SQL, URLs, logs or screenshots.
 
-## API contract (proposed, not implemented)
+## API contract (implemented in C2–C5)
 
 | Method | Path (under `/api/v1`) | Authorization | Behavior |
 |---|---|---|---|
@@ -42,13 +44,15 @@ This document and `00008_customer_accounts.sql` are the first additive developme
 | GET | `/admin/customers/{id}/orders?from&to&before_id&limit` | ADMIN | Order history including cancelled and pending; dates in Asia/Tehran |
 | GET | `/admin/reports/customers?from&to` | ADMIN | Aggregates per customer; clear gross/refund/net definitions |
 | GET | `/admin/reports/customers.csv?from&to` | ADMIN | UTF-8 BOM CSV, protected from spreadsheet formula injection |
-| GET | `/admin/reports/customers/{id}.csv?from&to` | ADMIN | Order-line detail export, with prices as recorded on order |
+| GET | `/admin/reports/customers.xlsx?from&to` | ADMIN | The same report as a real Office Open XML workbook (RTL, definitions sheet) |
+| GET | `/admin/customers/{id}` | ADMIN | Profile (phone shown as unverified) and all-time totals |
+| GET | `/admin/reports/customers/{id}/orders.csv?from&to` and `.xlsx` | ADMIN | Order-line detail export, with prices as recorded on order |
 
 `GET /customer/*` must be authenticated with customer cookies only; existing public `GET /public/order` tracking-token flow remains backward compatible.
 
 `POST /public/orders` should accept an optional authenticated customer session; if present, the service must bind the customer ID in the same locked order-creation transaction and in the idempotent replay response check. Never accept `customer_id` from client JSON. An idempotency key replay by a different account must never expose or claim an order owned by another account. Decide whether guest ordering stays permitted before enabling UI; this slice preserves it.
 
-## Pages (proposed, not implemented)
+## Pages (implemented in C4–C5)
 
 - `/menu/register`, `/menu/login`: mobile-first Persian RTL, accessible labels, clear privacy notice and no claim of SMS verification.
 - `/menu/account`, `/menu/my-orders`, `/menu/my-orders/:id`: protect personal data; avoid caching private content.
@@ -88,3 +92,28 @@ This document and `00008_customer_accounts.sql` are the first additive developme
 - **Slice C6 — release readiness:** isolated restore/migration, staging E2E, privacy approval, OTP/recovery decision, R1 remediation, rollout/rollback.
 
 No `migrate up`, production restart, live table modification, or deployment is authorized by this branch alone.
+
+## Implementation notes (C3–C5)
+
+- **Authorization:** every manager route uses the new policy action `customers.view` (ADMIN only,
+  registered through `guarded.handle`); OPERATOR receives 403 for customer data and downloads.
+- **Order attribution:** `POST /public/orders` with a customer cookie requires a live session, the app
+  Origin and the customer CSRF token. A stale, revoked, forged or deactivated session answers
+  `401 CUSTOMER_SESSION_EXPIRED` and never becomes a guest order. `orders.Create` locks the customer
+  row `FOR SHARE` after `LOCK_ORDER_CREATE` and inserts `customer_order_links` and
+  `customer_events.ORDER_CREATED` in the creation transaction.
+- **Idempotency:** the request hash includes the customer id with `omitempty`, so guest hashes are
+  byte-identical to the previous binary; a replay by another customer or a guest is
+  `409 IDEMPOTENCY_KEY_REUSED` without details, and replays re-check the stored owner.
+- **Reports:** figures follow `internal/reports` (gross at completion, sales refunds and prepayment
+  refunds by refund date, payments received / refunds recorded by row date, receivables point in
+  time). Ranges are inclusive Asia/Tehran business dates, at most 366 days and 5000 rows
+  (20000 lines for one customer's export).
+- **Exports:** CSV is UTF-8 with BOM; XLSX is written without third-party dependencies. Text that a
+  spreadsheet could read as a formula (`= + - @`, full-width forms, leading tab/CR/LF) is prefixed
+  with `'` in CSV and stored as a quote-prefixed inline string in XLSX; no hashes, tokens or IPs.
+- **C2 audit fixes:** login and registration revoke the session the browser presented; a password
+  change revokes every session and issues a fresh one; phone input accepts spaces, hyphens and
+  `0098`; invalid phones are charged to the per-IP limit only.
+- **Backward compatibility:** no new migration; `00008` is unchanged. The previous binary ignores the
+  customer tables; guest orders, tracking tokens and their hashes are unchanged.
