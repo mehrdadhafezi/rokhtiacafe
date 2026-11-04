@@ -6,6 +6,7 @@ import { Dialog } from '@/components/Dialog'
 import { ChevronIcon, TrashIcon } from '@/components/icons'
 import { EmptyState } from '@/components/states'
 import { Button } from '@/components/ui/button'
+import { useCustomerSession } from '@/features/account/session-context'
 import { createOrder, fetchMenu, menuQueryKey, orderQueryKey } from '@/features/menu/api'
 import { faClock } from '@/features/menu/format'
 import { ProductImage } from '@/features/menu/ProductImage'
@@ -42,6 +43,7 @@ function PriceChangeList({ changes }: { changes: PriceChange[] }) {
 /** /menu/cart — review, price confirmation and checkout (PRD §5.1 C2–C4, C7; F13). */
 export function CartPage() {
   const { cart, dispatch } = useCart()
+  const session = useCustomerSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const menu = useQuery({ queryKey: menuQueryKey, queryFn: ({ signal }) => fetchMenu(signal), staleTime: 30_000 })
@@ -61,7 +63,9 @@ export function CartPage() {
   const unavailable = new Set([...(recon?.unavailable.map((u) => u.productId) ?? []), ...serverUnavailable])
 
   const submit = useMutation({
-    mutationFn: (c: Cart) => createOrder(toOrderBody(c), checkoutKey(requestFingerprint(c)), clientId()),
+    // The same idempotency key is reused across a sign-in on purpose: a guest attempt that may have
+    // been recorded is then refused (409) instead of being placed twice.
+    mutationFn: (c: Cart) => createOrder(toOrderBody(c), checkoutKey(requestFingerprint(c)), clientId(), session.csrf),
     onMutate: () => setSubmitError(null),
     onSuccess: (order) => {
       if (!order.tracking_token) return
@@ -84,6 +88,7 @@ export function CartPage() {
         )
         return
       }
+      if (isApiError(err, 'CUSTOMER_SESSION_EXPIRED')) session.signedOut() // the cart stays; re-submit as a guest or sign in
       const ids = new Set(((err as { details?: { product_ids?: number[] } }).details?.product_ids ?? []) as number[])
       if (isApiError(err, 'INSUFFICIENT_STOCK')) {
         setShortStock(ids)
@@ -121,7 +126,8 @@ export function CartPage() {
 
   const ordering = menu.data?.ordering
   const blocked = unavailable.size > 0 || pendingPrices.length > 0
-  const canSubmit = !submit.isPending && !blocked && ordering?.open !== false
+  // While the account state loads the order could go out without the customer CSRF token.
+  const canSubmit = !submit.isPending && !blocked && ordering?.open !== false && session.state.status !== 'loading'
 
   return (
     <div className="space-y-4">
@@ -240,6 +246,19 @@ export function CartPage() {
             سفارش‌گیری فعلاً بسته است. از ساعت {faClock(ordering.opens_at)} دوباره امتحان کنید.
           </p>
         )}
+        {session.state.status === 'customer' ? (
+          <p className="mb-2 text-sm text-muted-foreground">
+            این سفارش در «سفارش‌های من» حساب {session.state.customer.first_name} ثبت می‌شود.
+          </p>
+        ) : session.state.status === 'guest' ? (
+          <p className="mb-2 text-sm text-muted-foreground">
+            به‌صورت مهمان سفارش می‌دهید.{' '}
+            <Link to="/menu/login" state={{ from: '/menu/cart' }} className="font-medium text-primary underline-offset-4 hover:underline">
+              ورود به حساب
+            </Link>{' '}
+            برای نگه‌داشتن سابقهٔ سفارش (سبد خرید حفظ می‌شود).
+          </p>
+        ) : null}
         <div className="mb-3 flex items-center justify-between">
           <span className="text-muted-foreground">
             جمع ({faDigits(cartCount(cart))} قلم) · پرداخت در کافه

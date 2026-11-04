@@ -4,7 +4,9 @@
  * - JSON in/out (FormData bodies are passed through for image uploads).
  * - Cookies are always sent; the staff session lives in an HttpOnly cookie.
  * - `X-CSRF-Token` is attached to every unsafe method once a token is known
- *   (it comes from `/auth/login` and `/auth/me`, see SECURITY §4).
+ *   (it comes from `/auth/login` and `/auth/me`, see SECURITY §4). That module-wide token is the
+ *   STAFF token. Customer requests pass their own token with the `csrf` option (or `null`), so a
+ *   staff token is never sent on a customer write and a customer token never on a staff write.
  * - Non-2xx responses become an `ApiError` carrying the stable error code.
  */
 
@@ -35,6 +37,8 @@ export type ApiErrorCode =
   | 'ORDERING_BUSY'
   | 'BUSY_RETRY'
   | 'PUSH_NOT_CONFIGURED'
+  /** The customer cookie belongs to an expired, revoked or deactivated session. */
+  | 'CUSTOMER_SESSION_EXPIRED'
   | 'INTERNAL'
   /** Client-side: the request never got a response (offline, DNS, proxy down). */
   | 'NETWORK_ERROR'
@@ -88,6 +92,11 @@ export interface RequestOptions {
   body?: unknown
   /** Extra headers, e.g. `Idempotency-Key` or `X-Tracking-Token`. */
   headers?: Record<string, string>
+  /**
+   * CSRF token for this request, overriding the staff token: a string is sent as `X-CSRF-Token`,
+   * `null` sends none. Customer requests always set it.
+   */
+  csrf?: string | null
   signal?: AbortSignal
 }
 
@@ -103,8 +112,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set('Content-Type', 'application/json')
     body = JSON.stringify(options.body)
   }
-  if (method !== 'GET' && csrfToken) {
-    headers.set('X-CSRF-Token', csrfToken)
+  const token = options.csrf !== undefined ? options.csrf : csrfToken
+  if (method !== 'GET' && token) {
+    headers.set('X-CSRF-Token', token)
   }
 
   let res: Response
