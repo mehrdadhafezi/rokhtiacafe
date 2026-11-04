@@ -13,6 +13,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 : "${TEST_DATABASE_ADMIN_URL:?}" "${MIGRATION_DATABASE_URL:?}" "${DATABASE_URL:?}"
 port="${E2E_PORT:-18090}"
 tmp="$(mktemp -d)"
+command -v cygpath > /dev/null && tmp="$(cygpath -m "$tmp")" # Go on Windows needs a native path
 exe=""
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) exe=.exe ;; esac
 rand() { od -An -N12 -tx1 /dev/urandom | tr -d ' \n'; }
@@ -31,7 +32,8 @@ if [ -z "${ROKH_BIN:-}" ]; then
   ROKH_BIN="$tmp/rokh$exe"
 fi
 
-eval "$("$tmp/c6$exe" createdb -admin "$TEST_DATABASE_ADMIN_URL" -owner "$MIGRATION_DATABASE_URL" -app "$DATABASE_URL" -prefix rokh_e2e)"
+created="$("$tmp/c6$exe" createdb -admin "$TEST_DATABASE_ADMIN_URL" -owner "$MIGRATION_DATABASE_URL" -app "$DATABASE_URL" -prefix rokh_e2e)"
+eval "$created"
 pid=""
 cleanup() {
   [ -n "$pid" ] && kill "$pid" 2> /dev/null && wait "$pid" 2> /dev/null

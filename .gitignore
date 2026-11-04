@@ -76,3 +76,8 @@ desktop.ini
 /backend/web/ui/*
 !/backend/web/ui/.gitkeep
 /release/
+
+# Playwright output (frontend/e2e, scripts/e2e.sh)
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/blob-report/

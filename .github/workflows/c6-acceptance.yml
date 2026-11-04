@@ -1,0 +1,125 @@
+name: c6-acceptance
+
+# C6 staging acceptance (docs/C6-STAGING-REHEARSAL.md) against throwaway PostgreSQL only:
+# backup → restore → forward migration 00008 → C1–C5 flows → binary rollback → roll-forward, and
+# the Playwright browser suite. Never connects to any server; never deploys.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c6-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The previous production-compatible build the rollback rehearsal returns to.
+  C6_BASELINE_REF: origin/main
+
+jobs:
+  rehearsal:
+    name: restore + rollback rehearsal (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: C1–C5 release build (this commit)
+        run: scripts/build-release.sh "c6-${GITHUB_SHA::12}"
+
+      - name: Previous release build (${{ env.C6_BASELINE_REF }})
+        run: |
+          base="$(git rev-parse "$C6_BASELINE_REF")"
+          echo "baseline $base"
+          git worktree add --detach ../baseline "$base"
+          (cd ../baseline && scripts/build-release.sh "baseline-${base::12}")
+
+      - name: C6 tool
+        working-directory: backend
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../release/c6-linux-amd64 ./tools/c6
+
+      - name: Rehearsal
+        run: |
+          TEST_PG_IMAGE=postgres:${{ matrix.postgres }}-bookworm \
+            bash deploy/test/c6/in-docker.sh release ../baseline/release release/c6-linux-amd64 c6-evidence
+
+      - name: Evidence (row digests and sums only, no personal data)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c6-rehearsal-pg${{ matrix.postgres }}
+          path: c6-evidence
+          retention-days: 30
+
+  e2e:
+    name: browser acceptance (Playwright, PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      PGPASSWORD: ci_only
+      TEST_DATABASE_ADMIN_URL: postgres://postgres:ci_only@localhost:5432/postgres?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://rokh_owner:owner_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+      DATABASE_URL: postgres://rokh_app:app_ci_only@localhost:5432/rokhtiacafe?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Database roles (same script as local Docker)
+        run: >
+          psql -h localhost -U postgres -d postgres
+          -v owner_password=owner_ci_only -v app_password=app_ci_only -v db_name=rokhtiacafe
+          -f deploy/local/postgres/roles.sql
+
+      - name: Release build (embedded frontend)
+        run: scripts/build-release.sh "e2e-${GITHUB_SHA::12}"
+
+      - name: Playwright browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser acceptance
+        run: ROKH_BIN="$PWD/release/rokh-linux-amd64" bash scripts/e2e.sh
+
+      - name: Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 30
