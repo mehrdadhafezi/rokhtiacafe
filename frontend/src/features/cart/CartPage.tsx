@@ -6,7 +6,9 @@ import { Dialog } from '@/components/Dialog'
 import { ChevronIcon, TrashIcon } from '@/components/icons'
 import { EmptyState } from '@/components/states'
 import { Button } from '@/components/ui/button'
-import { useCustomerSession } from '@/features/account/session-context'
+import { SessionCheckFailed } from '@/features/account/SessionCheckFailed'
+import { checkoutCsrf, useCustomerSession } from '@/features/account/session-context'
+import { customerKey } from '@/features/account/api'
 import { createOrder, fetchMenu, menuQueryKey, orderQueryKey } from '@/features/menu/api'
 import { faClock } from '@/features/menu/format'
 import { ProductImage } from '@/features/menu/ProductImage'
@@ -65,7 +67,12 @@ export function CartPage() {
   const submit = useMutation({
     // The same idempotency key is reused across a sign-in on purpose: a guest attempt that may have
     // been recorded is then refused (409) instead of being placed twice.
-    mutationFn: (c: Cart) => createOrder(toOrderBody(c), checkoutKey(requestFingerprint(c)), clientId(), session.csrf),
+    mutationFn: (c: Cart) => {
+      // The identity is decided by the server's answer, never guessed: an unknown session waits.
+      const csrf = checkoutCsrf(session.state)
+      if (csrf === 'unknown') throw new Error('customer session unknown')
+      return createOrder(toOrderBody(c), checkoutKey(requestFingerprint(c)), clientId(), csrf)
+    },
     onMutate: () => setSubmitError(null),
     onSuccess: (order) => {
       if (!order.tracking_token) return
@@ -89,6 +96,9 @@ export function CartPage() {
         return
       }
       if (isApiError(err, 'CUSTOMER_SESSION_EXPIRED')) session.signedOut() // the cart stays; re-submit as a guest or sign in
+      // The browser holds a customer cookie this page did not know about (e.g. signed in in another
+      // tab): ask the server who this is instead of retrying as a guest.
+      if (isApiError(err, 'CSRF_FAILED')) void queryClient.invalidateQueries({ queryKey: customerKey })
       const ids = new Set(((err as { details?: { product_ids?: number[] } }).details?.product_ids ?? []) as number[])
       if (isApiError(err, 'INSUFFICIENT_STOCK')) {
         setShortStock(ids)
@@ -126,8 +136,8 @@ export function CartPage() {
 
   const ordering = menu.data?.ordering
   const blocked = unavailable.size > 0 || pendingPrices.length > 0
-  // While the account state loads the order could go out without the customer CSRF token.
-  const canSubmit = !submit.isPending && !blocked && ordering?.open !== false && session.state.status !== 'loading'
+  // While the account state is loading or unknown the order could go out under the wrong identity.
+  const canSubmit = !submit.isPending && !blocked && ordering?.open !== false && checkoutCsrf(session.state) !== 'unknown'
 
   return (
     <div className="space-y-4">
@@ -258,6 +268,10 @@ export function CartPage() {
             </Link>{' '}
             برای نگه‌داشتن سابقهٔ سفارش (سبد خرید حفظ می‌شود).
           </p>
+        ) : session.state.status === 'error' ? (
+          <div className="mb-2">
+            <SessionCheckFailed what="تا روشن شدن آن، سفارش ثبت نمی‌شود؛ سبد خرید حفظ می‌شود." />
+          </div>
         ) : null}
         <div className="mb-3 flex items-center justify-between">
           <span className="text-muted-foreground">

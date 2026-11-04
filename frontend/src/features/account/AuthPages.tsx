@@ -10,6 +10,7 @@ import { faDigits } from '@/lib/digits'
 import { useZodForm } from '@/lib/form'
 
 import { customerApi } from './api'
+import { SessionCheckFailed } from './SessionCheckFailed'
 import { useCustomerSession } from './session-context'
 import { loginSchema, MIN_PASSWORD, registerSchema, safeReturnPath } from './validation'
 
@@ -177,6 +178,8 @@ export function RequireCustomer({ children }: { children: ReactNode }) {
   const { state } = useCustomerSession()
   const location = useLocation()
   if (state.status === 'loading') return <LoadingState />
+  // Unknown identity: never send a possibly signed-in customer to the login page.
+  if (state.status === 'error') return <SessionCheckFailed what="پس از برقراری اتصال، این صفحه نمایش داده می‌شود." />
   if (state.status === 'guest') return <Navigate to="/menu/login" replace state={{ from: location.pathname }} />
   return children
 }

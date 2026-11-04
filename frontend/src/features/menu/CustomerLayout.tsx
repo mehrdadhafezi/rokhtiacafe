@@ -31,7 +31,8 @@ function HeaderCart() {
 function HeaderAccount() {
   const { state } = useCustomerSession()
   const { pathname } = useLocation()
-  if (state.status === 'loading') return <span className="size-11" aria-hidden />
+  // Unknown identity (lookup failed): neither "ورود" nor a name; the page shows the retry.
+  if (state.status === 'loading' || state.status === 'error') return <span className="size-11" aria-hidden />
   const signedIn = state.status === 'customer'
   const to = signedIn ? '/menu/account' : '/menu/login'
   const current = pathname.startsWith(to) || (signedIn && pathname.startsWith('/menu/my-orders'))
