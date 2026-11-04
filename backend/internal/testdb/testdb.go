@@ -31,18 +31,27 @@ type DB struct {
 // New creates a database and drops it when the test finishes.
 func New(t testing.TB) *DB {
 	t.Helper()
+	return NewFrom(t, "")
+}
+
+// NewFrom is New on another disposable cluster: the variables are read with the given prefix
+// (PREFIX + TEST_DATABASE_ADMIN_URL, PREFIX + MIGRATION_DATABASE_URL, PREFIX + DATABASE_URL), and
+// REQUIRE_ + PREFIX + DB_TESTS=1 turns the skip into a failure. The clock tests use "CLOCK_" for a
+// PostgreSQL whose system clock the test controls (deploy/test/clock).
+func NewFrom(t testing.TB, prefix string) *DB {
+	t.Helper()
 	loadRepoDotEnv()
 
-	admin := os.Getenv("TEST_DATABASE_ADMIN_URL")
+	admin := os.Getenv(prefix + "TEST_DATABASE_ADMIN_URL")
 	if admin == "" {
-		if os.Getenv("REQUIRE_DB_TESTS") == "1" {
-			t.Fatal("REQUIRE_DB_TESTS=1 but TEST_DATABASE_ADMIN_URL is not set")
+		if os.Getenv("REQUIRE_"+prefix+"DB_TESTS") == "1" {
+			t.Fatalf("REQUIRE_%sDB_TESTS=1 but %sTEST_DATABASE_ADMIN_URL is not set", prefix, prefix)
 		}
-		t.Skip("TEST_DATABASE_ADMIN_URL not set; skipping PostgreSQL integration test")
+		t.Skipf("%sTEST_DATABASE_ADMIN_URL not set; skipping PostgreSQL integration test", prefix)
 	}
-	ownerBase, appBase := os.Getenv("MIGRATION_DATABASE_URL"), os.Getenv("DATABASE_URL")
+	ownerBase, appBase := os.Getenv(prefix+"MIGRATION_DATABASE_URL"), os.Getenv(prefix+"DATABASE_URL")
 	if ownerBase == "" || appBase == "" {
-		t.Fatal("MIGRATION_DATABASE_URL and DATABASE_URL must be set for integration tests")
+		t.Fatalf("%sMIGRATION_DATABASE_URL and %sDATABASE_URL must be set for integration tests", prefix, prefix)
 	}
 
 	var b [6]byte

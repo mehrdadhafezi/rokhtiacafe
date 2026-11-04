@@ -51,6 +51,9 @@ func NewSessions(cfg SessionConfig) *Sessions {
 	return &Sessions{cfg: cfg, now: time.Now}
 }
 
+// SetClock replaces the clock (tests that also move the database clock).
+func (s *Sessions) SetClock(now func() time.Time) { s.now = now }
+
 // Create inserts a session and returns the cookie token and CSRF token.
 func (s *Sessions) Create(ctx context.Context, q store.Querier, userID int64, ip *netip.Addr, userAgent string) (token, csrf string, err error) {
 	token, err = randomToken()

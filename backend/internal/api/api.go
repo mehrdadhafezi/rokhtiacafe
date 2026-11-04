@@ -165,6 +165,9 @@ func New(d Deps) *API {
 }
 
 // Handler is mounted at /api/v1.
+// SetCustomerClock replaces the customer-session clock (tests that also move the database clock).
+func (a *API) SetCustomerClock(now func() time.Time) { a.customers.SetClock(now) }
+
 func (a *API) Handler() http.Handler { return a.handler }
 
 // Permissions returns the declared action for every admin route.
