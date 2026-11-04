@@ -184,7 +184,7 @@ run "every legacy row identical after restore + 00008; customer tables new and e
 q() { sql "$RESTORED" "$1"; }
 check "customer tables owned by rokh_owner" test "$(q "SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'rokh' AND tablename LIKE 'customer%'")" = rokh_owner
 check "rokh_app may DELETE only customer_sessions" test \
-  "$(q "SELECT string_agg(t || '=' || has_table_privilege('rokh_app', 'rokh.' || t, 'DELETE'), ',' ORDER BY t) FROM unnest(ARRAY['customer_events','customer_order_links','customer_sessions','customers']) t")" = \
+  "$(q "SELECT string_agg(t || '=' || has_table_privilege('rokh_app', 'rokh.' || t, 'DELETE'), ',' ORDER BY t COLLATE \"C\") FROM unnest(ARRAY['customer_events','customer_order_links','customer_sessions','customers']) t")" = \
   "customer_events=false,customer_order_links=false,customer_sessions=true,customers=false"
 check "rokh_app has no TRUNCATE on customer tables" test "$(q "SELECT bool_or(has_table_privilege('rokh_app', 'rokh.' || t, 'TRUNCATE')) FROM unnest(ARRAY['customer_events','customer_order_links','customer_sessions','customers']) t")" = f
 check "append-only triggers on customer_events and customer_order_links" test "$(q "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('rokh.customer_events'::regclass, 'rokh.customer_order_links'::regclass)")" = 6
@@ -200,7 +200,7 @@ run "C1–C5 binary: rokh check" rokh_check "$NEW" "$RESTORED"
 snap "$RESTORED" S2-c1c5
 run "every S1 row unchanged by C1–C5 activity" "$C6" compare -label c1c5 -mode preserve -before /evidence/S1-restored-migrated.json \
   -after /evidence/S2-c1c5.json -volatile sessions,customer_sessions,users,customers,inventory_balances
-check "customer links are immutable for rokh_app (RK002)" sh -c "! out=\$(PGPASSWORD='$APP_PW' psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U rokh_app -d $RESTORED -c 'UPDATE rokh.customer_order_links SET customer_id = customer_id' 2>&1) && echo \"\$out\" | grep -q RK002"
+check "customer links are immutable for rokh_app (RK002)" sh -c "! out=\$(PGPASSWORD='$APP_PW' psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -h 127.0.0.1 -U rokh_app -d $RESTORED -c 'UPDATE rokh.customer_order_links SET customer_id = customer_id' 2>&1) && echo \"\$out\" | grep -q RK002"
 check "customer events cannot be deleted by rokh_app" sh -c "! PGPASSWORD='$APP_PW' psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U rokh_app -d $RESTORED -c 'DELETE FROM rokh.customer_events' > /dev/null 2>&1"
 
 echo "== 5. binary rollback: previous binary on the migrated database (no down-migration)"
