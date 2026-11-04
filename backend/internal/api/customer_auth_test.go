@@ -91,9 +91,14 @@ func TestCustomerLoginUniformErrorsAndPasswordRevocation(t *testing.T) {
 	resp, body = two.do(http.MethodPost, customerPath+"login", map[string]string{"phone": "09123456789", "password": "secure-cafe-2026"})
 	expect(t, resp, body, 200, "")
 	two.csrf = body["csrf_token"].(string)
+	oldCSRF := one.csrf
 	resp, body = one.do(http.MethodPost, customerPath+"password", map[string]string{
 		"current_password": "secure-cafe-2026", "new_password": "new-secure-2027"})
-	expect(t, resp, body, 204, "")
+	expect(t, resp, body, 200, "")
+	one.csrf = body["csrf_token"].(string)
+	if one.csrf == oldCSRF {
+		t.Fatal("password change must rotate the session and its CSRF token")
+	}
 	resp, body = two.do(http.MethodGet, customerPath+"me", nil)
 	expect(t, resp, body, 401, "UNAUTHENTICATED")
 	resp, body = one.do(http.MethodGet, customerPath+"me", nil)

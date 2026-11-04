@@ -56,6 +56,8 @@ func (a *API) writeOrderError(w http.ResponseWriter, r *http.Request, err error)
 		httpx.Error(w, http.StatusServiceUnavailable, "ORDERING_CLOSED", "ordering is closed")
 	case errors.Is(err, orders.ErrOrderingBusy):
 		httpx.Error(w, http.StatusServiceUnavailable, "ORDERING_BUSY", "too many open orders, try again shortly")
+	case errors.Is(err, orders.ErrCustomerInactive):
+		httpx.Error(w, http.StatusUnauthorized, "CUSTOMER_SESSION_EXPIRED", "customer session expired; log in again or order as a guest")
 	case errors.Is(err, orders.ErrTooManyOpenOrders):
 		w.Header().Set("Retry-After", "60")
 		httpx.Error(w, http.StatusTooManyRequests, "TOO_MANY_OPEN_ORDERS", "too many open orders from this network")
@@ -188,6 +190,12 @@ func (a *API) createOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A customer cookie makes this an authenticated order (session + origin + CSRF required);
+	// without one it is a guest order exactly as before. The id never comes from the body.
+	customerID, ok := a.customers.OrderCustomer(w, r)
+	if !ok {
+		return
+	}
 	ip := a.clientIP(r)
 	clientID := strings.ToLower(r.Header.Get(ClientIDHeader))
 	// Rate limits are charged inside Create, under the creation lock and after the replay check,
@@ -212,7 +220,8 @@ func (a *API) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, created, err := a.d.Orders.Create(r.Context(), orders.CreateInput{
-		Key: key, ClientIP: ip, Label: in.CustomerLabel, Note: in.CustomerNote, Items: in.Items, Admit: admit})
+		Key: key, ClientIP: ip, Label: in.CustomerLabel, Note: in.CustomerNote, Items: in.Items, Admit: admit,
+		CustomerID: customerID})
 	var limited rateLimitError
 	if errors.As(err, &limited) {
 		rateLimited(w, limited.wait)

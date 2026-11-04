@@ -13,6 +13,15 @@ import (
 type Querier interface {
 	AcceptOrder(ctx context.Context, arg AcceptOrderParams) (Order, error)
 	AddOrderPaid(ctx context.Context, arg AddOrderPaidParams) (Order, error)
+	// All-time, point-in-time figures for one customer (same definitions as the summary report).
+	AdminCustomerTotals(ctx context.Context, customerID int64) (AdminCustomerTotalsRow, error)
+	AdminGetCustomer(ctx context.Context, id int64) (AdminGetCustomerRow, error)
+	// One customer's orders created in [@from_ts, @to_ts), newest first, every status.
+	AdminListCustomerOrders(ctx context.Context, arg AdminListCustomerOrdersParams) ([]AdminListCustomerOrdersRow, error)
+	// ---- manager views (ADMIN only, customers.view) ----
+	// All-time figures per customer. completed_gross_rial is the total of COMPLETED orders before
+	// refunds; refunded_rial is what was refunded on them; receivables follow ReportReceivablesTotal.
+	AdminListCustomers(ctx context.Context, arg AdminListCustomersParams) ([]AdminListCustomersRow, error)
 	// Serializes a class of operations for the rest of the transaction (docs/DATABASE.md §3.1).
 	AdvisoryXactLock(ctx context.Context, key int64) error
 	AvailableStock(ctx context.Context, ids []int64) ([]AvailableStockRow, error)
@@ -74,6 +83,7 @@ type Querier interface {
 	ExpireStaleNotificationClaims(ctx context.Context, maxAttempts int32) (int64, error)
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetCategoryForUpdate(ctx context.Context, id int64) (Category, error)
+	GetCustomerOrder(ctx context.Context, arg GetCustomerOrderParams) (GetCustomerOrderRow, error)
 	GetExpenseByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Expense, error)
 	GetExpenseForUpdate(ctx context.Context, id int64) (Expense, error)
 	GetInventoryBalanceForUpdate(ctx context.Context, productID int64) (InventoryBalance, error)
@@ -81,6 +91,7 @@ type Querier interface {
 	GetOrder(ctx context.Context, id int64) (Order, error)
 	GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey pgtype.UUID) (Order, error)
 	GetOrderByTrackingHash(ctx context.Context, trackingTokenHash []byte) (Order, error)
+	GetOrderCustomer(ctx context.Context, orderID int64) (int64, error)
 	GetOrderForUpdate(ctx context.Context, id int64) (Order, error)
 	// Payments and refunds (docs/DATABASE.md §2.10, docs/WORKFLOWS.md §3).
 	// Every payment change runs under the parent order's row lock (F1); lock order: order → payments.
@@ -107,6 +118,8 @@ type Querier interface {
 	HasOutflowAfter(ctx context.Context, arg HasOutflowAfterParams) (bool, error)
 	IncrementPushSubscriptionFailures(ctx context.Context, id int64) (int32, error)
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
+	InsertCustomerOrderEvent(ctx context.Context, arg InsertCustomerOrderEventParams) error
+	InsertCustomerOrderLink(ctx context.Context, arg InsertCustomerOrderLinkParams) error
 	InsertMovement(ctx context.Context, arg InsertMovementParams) (InventoryMovement, error)
 	InsertNotificationEvent(ctx context.Context, arg InsertNotificationEventParams) error
 	InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error)
@@ -116,6 +129,10 @@ type Querier interface {
 	ListAdminPushSubscriptions(ctx context.Context) ([]int64, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
 	ListCategories(ctx context.Context) ([]Category, error)
+	// Curated activity: event type, time and the customer's own order number. Never the IP.
+	ListCustomerEvents(ctx context.Context, arg ListCustomerEventsParams) ([]ListCustomerEventsRow, error)
+	// ---- the customer's own history (filtered in SQL by the authenticated customer) ----
+	ListCustomerOrders(ctx context.Context, arg ListCustomerOrdersParams) ([]ListCustomerOrdersRow, error)
 	ListExpenses(ctx context.Context, arg ListExpensesParams) ([]Expense, error)
 	// Tracked products with their balance; products without a balance row show zeros.
 	ListInventory(ctx context.Context) ([]ListInventoryRow, error)
@@ -129,6 +146,12 @@ type Querier interface {
 	ListReceivables(ctx context.Context) ([]ListReceivablesRow, error)
 	ListUserPushSubscriptions(ctx context.Context, userID int64) ([]int64, error)
 	ListUsers(ctx context.Context) ([]User, error)
+	// Customer accounts: order attribution, private history and manager reporting
+	// (docs/CUSTOMER-ACCOUNTS-IMPLEMENTATION.md). Ownership comes ONLY from customer_order_links;
+	// names, phones, labels, IPs and device ids are never used to attribute an order.
+	// ---- order creation (inside the LOCK_ORDER_CREATE transaction) ----
+	// Taken after the creation lock and before stock, so a deactivation cannot race an order.
+	LockCustomerForOrder(ctx context.Context, id int64) (bool, error)
 	// FAILED or GONE.
 	MarkNotificationFinal(ctx context.Context, arg MarkNotificationFinalParams) (int64, error)
 	MarkNotificationRetry(ctx context.Context, arg MarkNotificationRetryParams) (int64, error)
@@ -149,6 +172,16 @@ type Querier interface {
 	// [@from_ts, @to_ts) for timestamps and inclusive [@from_date, @to_date] for date columns.
 	// Gross sales, order count and COGS of orders completed in the range (revenue recognised at completion).
 	ReportCompletedOrdersByDay(ctx context.Context, arg ReportCompletedOrdersByDayParams) ([]ReportCompletedOrdersByDayRow, error)
+	// Order-line detail of one customer's orders created in [@from_ts, @to_ts) for export: prices as
+	// recorded on the order. No costs, tokens or IPs.
+	ReportCustomerOrderLines(ctx context.Context, arg ReportCustomerOrderLinesParams) ([]ReportCustomerOrderLinesRow, error)
+	// Per-customer figures for [@from_ts, @to_ts), with the definitions of internal/reports:
+	// gross sales = totals of orders COMPLETED in the range; sales refunds = non-void REFUND rows of
+	// COMPLETED orders created in the range; prepayment refunds = REFUND rows of CANCELLED orders;
+	// payments received / refunds recorded = non-void PAYMENT / REFUND rows created in the range.
+	// Receivables and open orders are point in time (now). Only customers with activity in the
+	// range or an outstanding amount are returned.
+	ReportCustomers(ctx context.Context, arg ReportCustomersParams) ([]ReportCustomersRow, error)
 	// Estimated cost of wasted made-to-order items (information only, never in the operating result).
 	ReportEstimatedWasteByDay(ctx context.Context, arg ReportEstimatedWasteByDayParams) ([]ReportEstimatedWasteByDayRow, error)
 	ReportExpensesByDay(ctx context.Context, arg ReportExpensesByDayParams) ([]ReportExpensesByDayRow, error)
