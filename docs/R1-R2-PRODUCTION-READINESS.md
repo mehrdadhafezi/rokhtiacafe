@@ -1,6 +1,6 @@
 # Rokh — R1/R2 and final release-readiness gates
 
-**Current state:** PLANNING / IMPLEMENTATION NOT STARTED. This document records a work package and acceptance criteria, **not** evidence that R1, R2 or production release gates passed.
+**Current state (2026-11-05):** R1-A and R2-A (code and simulation) implemented and tested; R1-B, R2-B, real-data restore, deployed-binary rollback and the policy gates are BLOCKED / NOT RUN. Evidence: `docs/R1-R2-RUNTIME-EVIDENCE.md`; decisions: `docs/RELEASE-GATES-DECISION.md`. Production **NO-GO**.
 
 **Baseline:** C1–C6 development branch merge `12d7e61e604996efe452e3156dcfb0c1a111588c`. Work exclusively on `feat/r1-r2-production-readiness`, with a Draft PR against `feature/customer-accounts-history-reporting`. Neither `main` nor the live site is an approved target.
 

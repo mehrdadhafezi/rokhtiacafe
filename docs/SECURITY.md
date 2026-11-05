@@ -52,7 +52,7 @@ every admin route declares its action; a test asserts each registered route has 
 - `SameSite=Lax` as defence in depth. Public endpoints use no cookies, so CSRF does not apply.
 
 ## 5. Rate limiting & abuse controls
-In-memory token buckets (`golang.org/x/time/rate`), keyed by client IP. Client IP is taken
+In-memory token buckets (`golang.org/x/time/rate`), keyed by client IP (IPv4 address, IPv6 /64; §5.1). Client IP is taken
 from `X-Forwarded-For` **only** when the direct peer is in `TRUSTED_PROXIES`.
 
 | Scope | Limit |
@@ -136,8 +136,43 @@ unit-tested in Go · **[runtime]** observed on the production server (none yet).
 - **R1 PASS** requires all of: the runtime acceptance (R1-B2-RT) observed on the server, the owner's
   sign-off of gate G3, and a clean `client ip summary` window after enabling the edge ranges.
   Unit tests alone never make R1 PASS.
-- **Caching:** the CDN must not cache `/api/*`, `/admin/*` or HTML (risk R2). Order tracking
-  (`GET /public/order`, token in a header) sends `no-store`.
+- **Rate-limit keys [code]:** every per-IP limit and the per-network open-order cap key on
+  `httpx.RateKey`: the IPv4 address itself (unchanged), or the **/64** of an IPv6 address. A
+  subscriber normally controls a whole /64, so keying by the full IPv6 address let one client rotate
+  through 2^64 addresses and bypass every per-IP limit (found in R1-A,
+  `TestR1ProxyChainRateLimits/…IPv6…`, `TestRateKey`).
+- **Proxy-chain simulation [code]:** `internal/api/proxychain_test.go` runs visitor → CDN edge →
+  "LiteSpeed" → rokh over real TCP with distinct peer addresses, in every forwarding mode (append on
+  one line, append as a new line, replace, strip, preserve, prepend), with `TRUSTED_PROXIES` as today
+  (loopback only) and with edge ranges. Append/append-line resolve the honest identity in all threat
+  cases; replace and strip never accept a forged address (strip collapses everyone into one bucket);
+  **preserve and prepend let a direct-to-origin attacker choose the identity and bypass the limits
+  (10 of 10 requests through a 3/hour limit)**: that is the case only R1-B can exclude.
+- **Runtime evidence tools:** `backend/tools/xffprobe` (diagnostic upstream that classifies the
+  forwarded header without recording addresses) and `deploy/r1/probe-matrix.sh` (request matrix,
+  refuses production without written approval). Procedure: docs/R1-R2-RUNTIME-EVIDENCE.md.
+
+### 5.2 Response caching (R2)
+
+- **Default [code]:** the router mounts `/api/v1`, `/healthz` and `/readyz` behind
+  `httpx.NoStoreByDefault`: every response, including errors, 404 and 405 written by routers and
+  middleware, carries `Cache-Control: no-store` and `Pragma: no-cache`. A handler may opt in to
+  caching only for public data; the only one is `GET /public/menu` (`no-cache` + `ETag`, revalidated
+  on every use). `TestEveryAPIResponseIsNoStore` calls all API routes anonymously, as a customer and
+  as ADMIN.
+- **Isolation [code]:** `TestSharedCacheNeverServesPrivateResponsesAcrossIdentities` puts a shared
+  cache keyed by URL only (it ignores cookies and headers) in front of rokh and checks customer
+  profile, history and activity (A/B/anonymous), tracking with two tokens on the same URL, staff
+  identity and reports (ADMIN → OPERATOR/anonymous) and CSV/XLSX exports: no cross-identity response,
+  no cache hit. Before R2 a "cache by default" edge served the ADMIN's identity, the finance summary,
+  staff users, audit logs and the order list to other roles
+  (`TestSharedCacheLeaksWithoutNoStoreDefault`).
+- **Not in the app's power:** an edge configured to cache everything ignores origin headers
+  (`TestSharedCacheEverythingPolicyIsOutOfAppControl`). The CDN must bypass the cache for `/api/*`,
+  `/admin/*` and HTML; that is runtime gate R2-B (`deploy/r2/cache-matrix.sh`).
+- **Static files [code]:** hashed `/assets/*` stay `public, max-age=31536000, immutable`, product
+  images likewise; HTML, `sw.js` and manifests are `no-cache`; the staff service worker is scoped to
+  `/admin/` and treats `/api/*` as network-only (C6 browser tests).
 
 ## 6. Input validation
 - Strict JSON decoding (`DisallowUnknownFields`), body size limits, explicit per-field validation in Go; mirrored Zod schemas in the frontend for UX only — the server is authoritative.
