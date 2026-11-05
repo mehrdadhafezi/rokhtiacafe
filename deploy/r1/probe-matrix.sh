@@ -50,7 +50,9 @@ for target in cdn origin; do
   send "$target/empty-line" "$target" "" "$F1"
   send "$target/long-chain" "$target" "$(for i in $(seq 1 20); do printf '198.51.100.%s, ' "$i"; done)$F1"
   # Alternative client-IP headers must never reach rokh (deploy/litespeed include unsets them).
-  curl -sS --max-time 15 -H "X-R1-Case: $target/alt-headers" -H "X-Real-IP: $F1" -H "MC_REAL_IP: $F1" \
-    -H "Forwarded: for=$F1" -H "X-R1-Sent: " $( [ "$target" = origin ] && printf -- '-k -H Host:%s %s' "$ORIGIN_HOST" "$ORIGIN_URL" || printf '%s' "$CDN_URL") || true
+  alt=(-sS --max-time 15 -H "X-R1-Case: $target/alt-headers" -H "X-Real-IP: $F1" -H "MC_REAL_IP: $F1"
+    -H "Forwarded: for=$F1" -H "X-R1-Sent: ")
+  if [ "$target" = origin ]; then alt+=(-k -H "Host: $ORIGIN_HOST" "$ORIGIN_URL"); else alt+=("$CDN_URL"); fi
+  curl "${alt[@]}" || echo "{\"case\":\"$target/alt-headers\",\"error\":\"request failed\"}"
   echo
 done
