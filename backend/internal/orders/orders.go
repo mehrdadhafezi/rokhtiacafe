@@ -36,6 +36,7 @@ import (
 
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/payments"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
@@ -169,7 +170,8 @@ func HashToken(token string) []byte {
 }
 
 // ClientKey is the per-network key used for open-order caps; the raw IP is never stored.
-func (s *Service) ClientKey(ip netip.Addr) []byte { return s.mac("ip:", ip.String()) }
+// IPv6 is capped per /64 (httpx.RateKey); IPv4 keys are unchanged.
+func (s *Service) ClientKey(ip netip.Addr) []byte { return s.mac("ip:", httpx.RateKey(ip)) }
 
 // ---- ordering switch ----
 

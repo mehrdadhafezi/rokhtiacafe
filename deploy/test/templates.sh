@@ -27,15 +27,15 @@ ssl="$d/litespeed/rokh-proxy.ssl.conf.example"
 std="$d/litespeed/rokh-redirect.std.conf.example"
 
 echo "== scripts"
-for f in "$d"/scripts/*.sh "$d"/test/*.sh "$d"/test/*/*.sh "$d"/local/postgres/*.sh; do
+for f in "$d"/scripts/*.sh "$d"/test/*.sh "$d"/test/*/*.sh "$d"/r1/*.sh "$d"/r2/*.sh "$d"/local/postgres/*.sh; do
   check "bash -n $(basename "$f")" bash -n "$f"
 done
-for f in "$d"/scripts/*.sh "$d"/test/*.sh "$d"/test/*/*.sh; do
+for f in "$d"/scripts/*.sh "$d"/test/*.sh "$d"/test/*/*.sh "$d"/r1/*.sh "$d"/r2/*.sh; do
   [ "$(basename "$f")" = lib.sh ] && continue
   check "$(basename "$f") is executable in git" sh -c "git -C '$repo' ls-files -s '$f' | grep -q '^100755'"
 done
 if command -v shellcheck > /dev/null; then
-  check "shellcheck (warnings and above)" shellcheck -x -S warning -P "$d/scripts" "$d"/scripts/*.sh "$d"/test/*.sh "$d"/test/*/*.sh
+  check "shellcheck (warnings and above)" shellcheck -x -S warning -P "$d/scripts" "$d"/scripts/*.sh "$d"/test/*.sh "$d"/test/*/*.sh "$d"/r1/*.sh "$d"/r2/*.sh
 else
   echo "SKIP  shellcheck not installed"
 fi

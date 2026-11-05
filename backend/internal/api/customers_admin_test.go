@@ -17,7 +17,11 @@ import (
 // get fetches a path and returns the raw body (for CSV and XLSX downloads).
 func (c *client) get(path string) (*http.Response, []byte) {
 	c.e.t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, c.e.srv.URL+path, nil)
+	base := c.base
+	if base == "" {
+		base = c.e.srv.URL
+	}
+	req, _ := http.NewRequest(http.MethodGet, base+path, nil)
 	req.Header.Set("Origin", origin)
 	resp, err := c.http.Do(req)
 	if err != nil {
