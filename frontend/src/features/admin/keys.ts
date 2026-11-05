@@ -9,3 +9,4 @@ export const purchasesKey = ['admin', 'purchases'] as const
 export const expensesKey = ['admin', 'expenses'] as const
 export const reportsKey = ['admin', 'reports'] as const
 export const usersKey = ['admin', 'users'] as const
+export const customersKey = ['admin', 'customers'] as const

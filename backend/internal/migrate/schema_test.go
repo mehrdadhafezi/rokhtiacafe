@@ -127,7 +127,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func TestSchemaHasAllApprovedTables(t *testing.T) {
 	f := newFixture(t)
-	want := []string{"audit_logs", "categories", "expenses", "inventory_balances", "inventory_movements",
+	want := []string{"audit_logs", "categories", "customer_events", "customer_order_links", "customer_sessions", "customers",
+		"expenses", "inventory_balances", "inventory_movements",
 		"notification_events", "order_items", "orders", "payments", "products", "purchase_entries",
 		"push_subscriptions", "sessions", "users"}
 	rows, err := f.owner.Query(f.ctx, `SELECT tablename FROM pg_tables WHERE schemaname = 'rokh'

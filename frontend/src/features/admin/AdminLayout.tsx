@@ -19,7 +19,8 @@ const nav: { to: string; label: string; action: Action; end?: boolean }[] = [
   { to: '/purchases', label: 'خریدها', action: 'inventory.manage' },
   { to: '/expenses', label: 'هزینه‌ها', action: 'expenses.manage' },
   { to: '/reports', label: 'گزارش‌ها', action: 'reports.view' },
-  { to: '/users', label: 'کاربران', action: 'users.manage' },
+  { to: '/customers', label: 'مشتریان', action: 'customers.view' },
+  { to: '/users', label: 'کاربران (کارکنان)', action: 'users.manage' },
 ]
 
 function Shell() {

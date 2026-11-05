@@ -132,3 +132,17 @@ func SecurityHeaders(production bool) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// NoStoreByDefault marks a response as uncacheable by browsers, proxies and CDNs before the
+// handler runs (docs/SECURITY.md §5.2, R2). A handler that serves genuinely public content may
+// replace Cache-Control; everything else, including error responses written by routers and
+// middleware, stays "no-store". Pragma covers HTTP/1.0 caches; it is ignored when Cache-Control
+// is present.
+func NoStoreByDefault(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Cache-Control", "no-store")
+		h.Set("Pragma", "no-cache")
+		next.ServeHTTP(w, r)
+	})
+}

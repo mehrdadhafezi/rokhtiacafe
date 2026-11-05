@@ -7,6 +7,7 @@ import { AccountPage } from '@/features/admin/account/AccountPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { RequirePermission } from '@/features/admin/auth'
 import { CatalogPage } from '@/features/admin/catalog/CatalogPage'
+import { CustomerDetailPage, CustomerReportPage, CustomersPage } from '@/features/admin/customers/CustomersPages'
 import { DashboardPage } from '@/features/admin/dashboard/DashboardPage'
 import { ExpensesPage } from '@/features/admin/expenses/ExpensesPage'
 import { InventoryPage } from '@/features/admin/inventory/InventoryPage'
@@ -34,6 +35,9 @@ export const router = createBrowserRouter(
         { path: 'purchases', element: guard('inventory.manage', <PurchasesPage />) },
         { path: 'expenses', element: guard('expenses.manage', <ExpensesPage />) },
         { path: 'reports', element: guard('reports.view', <ReportsPage />) },
+        { path: 'customers', element: guard('customers.view', <CustomersPage />) },
+        { path: 'customers/report', element: guard('customers.view', <CustomerReportPage />) },
+        { path: 'customers/:id', element: guard('customers.view', <CustomerDetailPage />) },
         { path: 'users', element: guard('users.manage', <UsersPage />) },
         { path: 'account', element: <AccountPage /> },
         { path: '*', element: <NotFoundPage homeHref="/admin/" /> },

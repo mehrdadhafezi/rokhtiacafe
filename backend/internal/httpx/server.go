@@ -41,17 +41,19 @@ func NewRouter(d Deps) http.Handler {
 		Error(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 	})
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	r.With(NoStoreByDefault).Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	r.Get("/readyz", readyz(d))
+	r.With(NoStoreByDefault).Get("/readyz", readyz(d))
 
 	if d.API != nil {
+		// R2: every API response (success, error, 404, 405) is uncacheable unless its handler
+		// deliberately opts in (only the public menu, with no-cache + ETag).
+		api := r.With(NoStoreByDefault)
 		if d.ClientIPStats != nil {
-			r.With(ClientIPTelemetry(d.TrustedProxies, d.ClientIPStats)).Mount("/api/v1", d.API)
-		} else {
-			r.Mount("/api/v1", d.API)
+			api = api.With(ClientIPTelemetry(d.TrustedProxies, d.ClientIPStats))
 		}
+		api.Mount("/api/v1", d.API)
 	}
 	if d.Media != nil {
 		r.Handle("/media/*", d.Media)

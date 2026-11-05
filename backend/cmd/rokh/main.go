@@ -206,7 +206,7 @@ func serve(ctx context.Context) error {
 		ClientIPStats:  ipStats,
 	})
 	go ipStats.Run(ctx, logger, httpx.ClientIPSummaryInterval)
-	go cleanupSessions(ctx, queries, cfg.SessionIdle, logger)
+	go cleanupSessions(ctx, queries, pool, cfg.SessionIdle, logger)
 	go expireOrders(ctx, orderSvc, logger)
 	go cleanupNotifications(ctx, pool, logger)
 	if pushSvc != nil {
@@ -342,7 +342,7 @@ func runCheck(ctx context.Context, stdout io.Writer) error {
 }
 
 // cleanupSessions deletes expired and idle sessions hourly (docs/ARCHITECTURE.md §2.5).
-func cleanupSessions(ctx context.Context, q *store.Queries, idle time.Duration, logger *slog.Logger) {
+func cleanupSessions(ctx context.Context, q *store.Queries, pool *pgxpool.Pool, idle time.Duration, logger *slog.Logger) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
@@ -351,6 +351,12 @@ func cleanupSessions(ctx context.Context, q *store.Queries, idle time.Duration, 
 			logger.Warn("session cleanup failed", "err", err)
 		} else if n > 0 {
 			logger.Info("expired sessions removed", "count", n)
+		}
+		// Customer sessions use an independent table and the same expiry/idle rules.
+		_, customerErr := pool.Exec(ctx, `DELETE FROM customer_sessions
+			WHERE expires_at <= now() OR last_seen_at < $1`, time.Now().Add(-idle))
+		if customerErr != nil && ctx.Err() == nil {
+			logger.Warn("customer session cleanup failed", "err", customerErr)
 		}
 		select {
 		case <-ctx.Done():

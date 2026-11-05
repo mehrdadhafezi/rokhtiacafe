@@ -13,6 +13,7 @@ import (
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/auth"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/catalog"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/customer"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/expenses"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
@@ -55,6 +56,7 @@ type API struct {
 	payments  *payments.Service
 	expenses  *expenses.Service
 	reports   *reports.Service
+	customers *customer.Service
 	handler   http.Handler
 	perms     map[string]auth.Action // "METHOD /api/v1/admin/..." → action
 }
@@ -69,6 +71,11 @@ func New(d Deps) *API {
 		reports:   &reports.Service{Pool: d.Pool, Location: d.Location}}
 
 	r := chi.NewRouter()
+
+	// Customer identity has a separate cookie and never grants staff privileges; staff sessions
+	// are never read on these routes.
+	a.customers = customer.New(d.Pool, d.Auth, a.clientIP)
+	r.Route("/customer", a.routeCustomers)
 
 	// Public routes never read the session cookie, so browsing the menu cannot keep a staff
 	// session alive or touch the sessions table.
@@ -141,6 +148,16 @@ func New(d Deps) *API {
 		g.handle(http.MethodPost, "/push/subscriptions", auth.ActPushManage, a.pushSubscribe)
 		g.handle(http.MethodDelete, "/push/subscriptions", auth.ActPushManage, a.pushUnsubscribe)
 		g.handle(http.MethodPost, "/push/test", auth.ActPushManage, a.pushTest)
+
+		// Customers (café clients, not staff users): ADMIN only, never cached.
+		g.handle(http.MethodGet, "/customers", auth.ActCustomersView, noStore(a.listCustomers))
+		g.handle(http.MethodGet, "/customers/{id}", auth.ActCustomersView, noStore(a.getCustomer))
+		g.handle(http.MethodGet, "/customers/{id}/orders", auth.ActCustomersView, noStore(a.customerOrdersAdmin))
+		g.handle(http.MethodGet, "/reports/customers", auth.ActCustomersView, noStore(a.reportCustomers))
+		g.handle(http.MethodGet, "/reports/customers.csv", auth.ActCustomersView, noStore(a.reportCustomersExport("csv")))
+		g.handle(http.MethodGet, "/reports/customers.xlsx", auth.ActCustomersView, noStore(a.reportCustomersExport("xlsx")))
+		g.handle(http.MethodGet, "/reports/customers/{id}/orders.csv", auth.ActCustomersView, noStore(a.reportCustomerLinesExport("csv")))
+		g.handle(http.MethodGet, "/reports/customers/{id}/orders.xlsx", auth.ActCustomersView, noStore(a.reportCustomerLinesExport("xlsx")))
 	})
 
 	a.handler = r
@@ -148,6 +165,9 @@ func New(d Deps) *API {
 }
 
 // Handler is mounted at /api/v1.
+// SetCustomerClock replaces the customer-session clock (tests that also move the database clock).
+func (a *API) SetCustomerClock(now func() time.Time) { a.customers.SetClock(now) }
+
 func (a *API) Handler() http.Handler { return a.handler }
 
 // Permissions returns the declared action for every admin route.

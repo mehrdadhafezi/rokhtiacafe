@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -73,7 +74,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	username := users.NormalizeUsername(in.Username)
 	ip := a.clientIP(r)
 
-	if ok, wait := a.d.LoginPerIP.Allow(ip.String()); !ok {
+	if ok, wait := a.d.LoginPerIP.Allow(httpx.RateKey(ip)); !ok {
 		rateLimited(w, wait)
 		return
 	}
@@ -233,6 +234,13 @@ func (a *API) internal(w http.ResponseWriter, r *http.Request, err error) {
 			"route", strings.TrimSpace(r.Method+" "+r.URL.Path), "sqlstate", pgErr.Code)
 		w.Header().Set("Retry-After", "1")
 		httpx.Error(w, http.StatusServiceUnavailable, "BUSY_RETRY", "busy, please retry")
+		return
+	}
+	// The client went away (navigation, closed tab): not a server failure, so not an ERROR line
+	// that monitoring would page on. Nobody reads the response.
+	if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+		a.d.Logger.Info("request cancelled by the client", "request_id", httpx.RequestIDFrom(r.Context()),
+			"route", strings.TrimSpace(r.Method+" "+r.URL.Path))
 		return
 	}
 	a.d.Logger.Error("request failed", "request_id", httpx.RequestIDFrom(r.Context()),

@@ -37,6 +37,7 @@ const (
 	ActPushManage          Action = "push.manage"
 	ActUsersManage         Action = "users.manage"
 	ActAuditView           Action = "audit.view"
+	ActCustomersView       Action = "customers.view" // customer PII, purchase history, customer reports and exports
 	ActOwnPassword         Action = "self.password"
 )
 
@@ -58,7 +59,7 @@ var AllActions = []Action{
 	ActCancelWithRefund, ActPaymentsRefund, ActPaymentsVoid, ActOrderingToggle, ActCatalogView,
 	ActProductAvailability, ActCatalogManage, ActInventoryViewQty, ActInventoryViewCost,
 	ActInventoryManage, ActExpensesManage, ActReportsView, ActPushManage, ActUsersManage,
-	ActAuditView, ActOwnPassword,
+	ActAuditView, ActOwnPassword, ActCustomersView,
 }
 
 var knownActions = func() map[Action]bool {

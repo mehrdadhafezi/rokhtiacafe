@@ -7,6 +7,11 @@
 //   - Every other order mutation starts with SELECT … FOR UPDATE on the order row (F1); status
 //     UPDATEs still carry a WHERE guard on the expected status.
 //   - Lock order: advisory lock → order row → products (share) → balances (ascending product id).
+//     An authenticated customer's row is locked FOR SHARE right after the advisory lock, so a
+//     concurrent deactivation can never race an order being attributed to the account.
+//   - Customer attribution (docs/CUSTOMER-ACCOUNTS-IMPLEMENTATION.md): the customer_order_links row
+//     and the ORDER_CREATED event are written in the creation transaction; the customer id comes
+//     only from the server-side session, never from the request body.
 package orders
 
 import (
@@ -31,6 +36,7 @@ import (
 
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/audit"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/config"
+	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/httpx"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/inventory"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/payments"
 	"github.com/mehrdadhafezi/rokhtiacafe/backend/internal/store"
@@ -66,6 +72,8 @@ var (
 	ErrTooManyOpenOrders = errors.New("too many open orders from this network")
 	ErrOrderExpired      = errors.New("order expired before it was accepted")
 	ErrPaymentState      = errors.New("order holds money")
+	// ErrCustomerInactive: the authenticated account was deactivated before the order was placed.
+	ErrCustomerInactive = errors.New("customer account is not active")
 )
 
 // ValidationError lists invalid fields.
@@ -162,7 +170,8 @@ func HashToken(token string) []byte {
 }
 
 // ClientKey is the per-network key used for open-order caps; the raw IP is never stored.
-func (s *Service) ClientKey(ip netip.Addr) []byte { return s.mac("ip:", ip.String()) }
+// IPv6 is capped per /64 (httpx.RateKey); IPv4 keys are unchanged.
+func (s *Service) ClientKey(ip netip.Addr) []byte { return s.mac("ip:", httpx.RateKey(ip)) }
 
 // ---- ordering switch ----
 
@@ -208,6 +217,9 @@ type CreateInput struct {
 	Label    string
 	Note     string
 	Items    []Item
+	// CustomerID is the authenticated customer account (0 = guest). Set only by the server from
+	// the customer session; it is never read from client JSON.
+	CustomerID int64
 	// Admit, if set, is called under the creation lock only for requests that will create a new
 	// order (after the replay check), so duplicates of an in-flight or finished request are never
 	// charged against rate limits. A non-nil error aborts the request unchanged.
@@ -247,13 +259,17 @@ func validate(in *CreateInput) ValidationError {
 	return bad
 }
 
-// requestHash is SHA-256 of the canonical request (items sorted by product id).
+// requestHash is SHA-256 of the canonical request (items sorted by product id). The customer id is
+// part of the request's identity, so the same key replayed by another account or by a guest is a
+// different request (409, nothing revealed). It is omitted for guests, keeping guest hashes
+// byte-for-byte identical to orders created before customer accounts existed.
 func requestHash(in CreateInput) []byte {
 	b, _ := json.Marshal(struct {
-		Label string `json:"l"`
-		Note  string `json:"n"`
-		Items []Item `json:"i"`
-	}{in.Label, in.Note, in.Items})
+		Label    string `json:"l"`
+		Note     string `json:"n"`
+		Items    []Item `json:"i"`
+		Customer int64  `json:"c,omitempty"`
+	}{in.Label, in.Note, in.Items, in.CustomerID})
 	h := sha256.Sum256(b)
 	return h[:]
 }
@@ -277,12 +293,32 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (d Detail, created
 			if !bytes.Equal(existing.RequestHash, hash) {
 				return ErrIdempotencyReused
 			}
+			// Defence in depth: the stored owner must be exactly the caller (or nobody for a guest).
+			owner, err := q.GetOrderCustomer(ctx, existing.ID)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				owner = 0
+			case err != nil:
+				return err
+			}
+			if owner != in.CustomerID {
+				return ErrIdempotencyReused
+			}
 			d, err = loadDetail(ctx, q, existing)
 			return err
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 
+		if in.CustomerID != 0 {
+			active, err := q.LockCustomerForOrder(ctx, in.CustomerID)
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
+				return ErrCustomerInactive
+			}
+			if err != nil {
+				return err
+			}
+		}
 		if in.Admit != nil {
 			if err := in.Admit(); err != nil {
 				return err
@@ -382,10 +418,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (d Detail, created
 			}
 			d.Items = append(d.Items, item)
 		}
+		details := map[string]any{"display_number": num, "total_rial": total, "lines": len(d.Items)}
+		if in.CustomerID != 0 {
+			if err := q.InsertCustomerOrderLink(ctx, store.InsertCustomerOrderLinkParams{OrderID: o.ID, CustomerID: in.CustomerID}); err != nil {
+				return err
+			}
+			var ip *netip.Addr
+			if in.ClientIP.IsValid() {
+				ip = &in.ClientIP
+			}
+			if err := q.InsertCustomerOrderEvent(ctx, store.InsertCustomerOrderEventParams{
+				CustomerID: in.CustomerID, OrderID: pgtype.Int8{Int64: o.ID, Valid: true}, Ip: ip}); err != nil {
+				return err
+			}
+			details["customer_id"] = in.CustomerID
+		}
 		created = true
 		return audit.Record(ctx, q, audit.Actor{Kind: audit.KindCustomer, IP: in.ClientIP}, audit.Entry{
-			Action: "order.create", EntityType: "order", EntityID: strconv.FormatInt(o.ID, 10),
-			Details: map[string]any{"display_number": num, "total_rial": total, "lines": len(d.Items)}})
+			Action: "order.create", EntityType: "order", EntityID: strconv.FormatInt(o.ID, 10), Details: details})
 	})
 	if err != nil {
 		return Detail{}, false, err
