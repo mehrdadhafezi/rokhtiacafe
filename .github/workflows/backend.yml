@@ -88,6 +88,23 @@ jobs:
           grep -q "server stopped" serve.log
           cat serve.log
 
+  clock:
+    # C6 release gate: sale completed on Tehran day D, refunded on D+1, against a throwaway
+    # PostgreSQL whose clock the test controls (libfaketime; deploy/test/clock).
+    name: cross-day refund gate (PostgreSQL ${{ matrix.postgres }}, controlled clock)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: PG_MAJOR=${{ matrix.postgres }} bash deploy/test/clock/run.sh
+
   sqlc:
     name: sqlc generated code is up to date
     runs-on: ubuntu-latest

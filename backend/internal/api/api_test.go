@@ -52,7 +52,12 @@ type env struct {
 
 func newEnv(t *testing.T, opts ...func(*api.Deps)) *env {
 	t.Helper()
-	db := testdb.New(t)
+	return newEnvOn(t, testdb.New(t), opts...)
+}
+
+// newEnvOn is newEnv on a given throwaway database (e.g. one on the controllable-clock cluster).
+func newEnvOn(t *testing.T, db *testdb.DB, opts ...func(*api.Deps)) *env {
+	t.Helper()
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m, err := migrate.New(db.OwnerURL, quiet)
 	if err != nil {

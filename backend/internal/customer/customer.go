@@ -55,6 +55,7 @@ type Service struct {
 	loginPhone    *ratelimit.Limiter
 	registerIP    *ratelimit.Limiter
 	registerPhone *ratelimit.Limiter
+	now           func() time.Time
 }
 
 // New returns the customer identity service. staff is used only for its Origin check and cookie
@@ -62,8 +63,11 @@ type Service struct {
 func New(db *pgxpool.Pool, staff *auth.Middleware, ip func(*http.Request) netip.Addr) *Service {
 	return &Service{db: db, staff: staff, secure: staff.Cookie.Secure, ip: ip,
 		loginIP: ratelimit.New(20, 15*time.Minute), loginPhone: ratelimit.New(5, 15*time.Minute),
-		registerIP: ratelimit.New(10, time.Hour), registerPhone: ratelimit.New(3, time.Hour)}
+		registerIP: ratelimit.New(10, time.Hour), registerPhone: ratelimit.New(3, time.Hour), now: time.Now}
 }
+
+// SetClock replaces the clock used for session expiry (tests that also move the database clock).
+func (s *Service) SetClock(now func() time.Time) { s.now = now }
 
 // CookieName is the customer session cookie (__Host- prefixed when cookies are Secure).
 func (s *Service) CookieName() string {
@@ -123,12 +127,12 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request) (*Principal, er
 	if err != nil {
 		return nil, err
 	}
-	if !active || !time.Now().Before(expires) || time.Since(lastSeen) > idleLimit {
+	if !active || !s.now().Before(expires) || s.now().Sub(lastSeen) > idleLimit {
 		_, _ = s.db.Exec(r.Context(), "DELETE FROM customer_sessions WHERE token_hash=$1", hash[:])
 		s.clearCookie(w)
 		return nil, errSessionDenied
 	}
-	if time.Since(lastSeen) > 5*time.Minute {
+	if s.now().Sub(lastSeen) > 5*time.Minute {
 		if _, err = s.db.Exec(r.Context(), "UPDATE customer_sessions SET last_seen_at=now() WHERE token_hash=$1", hash[:]); err != nil {
 			return nil, err
 		}
