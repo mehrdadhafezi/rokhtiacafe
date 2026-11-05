@@ -138,6 +138,7 @@ type client struct {
 	e    *env
 	http *http.Client
 	csrf string
+	base string // "" = the test server; otherwise e.g. a simulated proxy in front of it
 }
 
 func (e *env) newClient() *client {
@@ -161,7 +162,11 @@ func (c *client) do(method, path string, body any, opts ...reqOpt) (*http.Respon
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, c.e.srv.URL+path, rd)
+	base := c.base
+	if base == "" {
+		base = c.e.srv.URL
+	}
+	req, _ := http.NewRequest(method, base+path, rd)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", origin)
 	if c.csrf != "" {
