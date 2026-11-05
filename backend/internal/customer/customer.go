@@ -299,7 +299,7 @@ func (s *Service) throttle(w http.ResponseWriter, ip netip.Addr, phone string, r
 	if registration {
 		byIP, byPhone = s.registerIP, s.registerPhone
 	}
-	ok, wait := byIP.Allow(ip.String())
+	ok, wait := byIP.Allow(httpx.RateKey(ip))
 	if ok && phone != "" {
 		var w2 time.Duration
 		ok, w2 = byPhone.Allow(phone)

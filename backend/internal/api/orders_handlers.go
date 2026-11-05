@@ -201,7 +201,7 @@ func (a *API) createOrder(w http.ResponseWriter, r *http.Request) {
 	// Rate limits are charged inside Create, under the creation lock and after the replay check,
 	// so retries of a request that already exists or is still in flight are never limited.
 	admit := func() error {
-		if ok, wait := a.d.OrderPerIP.Allow(ip.String()); !ok {
+		if ok, wait := a.d.OrderPerIP.Allow(httpx.RateKey(ip)); !ok {
 			return rateLimitError{wait}
 		}
 		if clientIDRE.MatchString(clientID) {
@@ -242,7 +242,7 @@ func (a *API) trackLimit(w http.ResponseWriter, r *http.Request) bool {
 	if a.d.TrackPerIP == nil {
 		return true
 	}
-	if ok, wait := a.d.TrackPerIP.Allow(a.clientIP(r).String()); !ok {
+	if ok, wait := a.d.TrackPerIP.Allow(httpx.RateKey(a.clientIP(r))); !ok {
 		rateLimited(w, wait)
 		return false
 	}

@@ -74,7 +74,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	username := users.NormalizeUsername(in.Username)
 	ip := a.clientIP(r)
 
-	if ok, wait := a.d.LoginPerIP.Allow(ip.String()); !ok {
+	if ok, wait := a.d.LoginPerIP.Allow(httpx.RateKey(ip)); !ok {
 		rateLimited(w, wait)
 		return
 	}

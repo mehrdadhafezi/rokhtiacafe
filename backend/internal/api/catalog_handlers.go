@@ -356,7 +356,7 @@ func (a *API) publicMenu(w http.ResponseWriter, r *http.Request) {
 func (a *API) publicRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.d.PublicPerIP != nil {
-			if ok, wait := a.d.PublicPerIP.Allow(a.clientIP(r).String()); !ok {
+			if ok, wait := a.d.PublicPerIP.Allow(httpx.RateKey(a.clientIP(r))); !ok {
 				rateLimited(w, wait)
 				return
 			}
